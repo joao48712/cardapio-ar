@@ -42,3 +42,5 @@ next-env.d.ts
 
 # exemplo de variáveis pode ir para o git
 !.env.example
+.vercel
+.env*
