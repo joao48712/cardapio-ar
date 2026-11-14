@@ -1,5 +1,6 @@
 // Otimiza um GLB de fotogrametria no navegador, antes do upload.
-// Sem compressão de geometria (Draco/meshopt) para manter compatível com Scene Viewer e Quick Look.
+// Lê arquivos com compressão de geometria (Draco/meshopt), mas sempre grava sem ela,
+// para manter compatível com Scene Viewer e Quick Look.
 import { WebIO, type Document } from "@gltf-transform/core";
 import { ALL_EXTENSIONS } from "@gltf-transform/extensions";
 import {
@@ -13,7 +14,7 @@ import {
   VertexCountMethod,
   weld,
 } from "@gltf-transform/functions";
-import { MeshoptSimplifier } from "meshoptimizer";
+import { MeshoptDecoder, MeshoptSimplifier } from "meshoptimizer";
 
 export type OptimizeOptions = {
   /** Triângulos máximos depois de simplificar. */
@@ -37,8 +38,45 @@ export type OptimizeResult = {
   after: ModelInfo;
 };
 
-function io() {
-  return new WebIO().registerExtensions(ALL_EXTENSIONS);
+const DRACO = "KHR_draco_mesh_compression";
+const MESHOPT = "EXT_meshopt_compression";
+
+let draco: Promise<unknown> | null = null;
+
+/** Decodificador Draco (arquivos em public/draco). Só é baixado quando o GLB precisa. */
+function loadDraco(): Promise<unknown> {
+  draco ??= (async () => {
+    type Factory = (o: { wasmBinary: ArrayBuffer }) => Promise<unknown>;
+    const w = window as unknown as { DracoDecoderModule?: Factory };
+    if (!w.DracoDecoderModule) {
+      await new Promise<void>((resolve, reject) => {
+        const s = document.createElement("script");
+        s.src = "/draco/draco_wasm_wrapper.js";
+        s.onload = () => resolve();
+        s.onerror = () => reject(new Error("não foi possível baixar o decodificador Draco"));
+        document.head.appendChild(s);
+      });
+    }
+    const res = await fetch("/draco/draco_decoder.wasm");
+    if (!res.ok || !w.DracoDecoderModule) throw new Error("não foi possível baixar o decodificador Draco");
+    return w.DracoDecoderModule({ wasmBinary: await res.arrayBuffer() });
+  })().catch((e) => {
+    draco = null;
+    throw e;
+  });
+  return draco;
+}
+
+/** Leitor com os decodificadores que este arquivo pede. */
+async function io(bytes: Uint8Array) {
+  const reader = new WebIO().registerExtensions(ALL_EXTENSIONS);
+  const used = (await reader.binaryToJSON(bytes)).json.extensionsUsed ?? [];
+  if (used.includes(DRACO)) reader.registerDependencies({ "draco3d.decoder": await loadDraco() });
+  if (used.includes(MESHOPT)) {
+    await MeshoptDecoder.ready;
+    reader.registerDependencies({ "meshopt.decoder": MeshoptDecoder });
+  }
+  return reader;
 }
 
 function info(doc: Document, bytes: number): ModelInfo {
@@ -50,7 +88,8 @@ function info(doc: Document, bytes: number): ModelInfo {
 }
 
 export async function inspectGlb(file: Blob): Promise<ModelInfo> {
-  const doc = await io().readBinary(new Uint8Array(await file.arrayBuffer()));
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const doc = await (await io(bytes)).readBinary(bytes);
   return info(doc, file.size);
 }
 
@@ -58,9 +97,15 @@ export async function optimizeGlb(file: Blob, opts: OptimizeOptions = {}): Promi
   const { maxTriangles = 60_000, maxTexture = 2048, realWidthCm = null } = opts;
   await MeshoptSimplifier.ready;
 
-  const reader = io();
-  const doc = await reader.readBinary(new Uint8Array(await file.arrayBuffer()));
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const reader = await io(bytes);
+  const doc = await reader.readBinary(bytes);
   const before = info(doc, file.size);
+
+  // A geometria já foi descomprimida na leitura; tira a marca de compressão para gravar sem ela
+  for (const ext of doc.getRoot().listExtensionsUsed()) {
+    if (ext.extensionName === DRACO || ext.extensionName === MESHOPT) ext.dispose();
+  }
 
   await doc.transform(dedup(), weld());
 
