@@ -5,9 +5,13 @@ import type { Category, Item, MenuSection } from "./types";
 
 export const MENU_TAG = "menu";
 
-async function load(): Promise<{ categories: Category[]; items: Item[] }> {
+type Loaded = { categories: Category[]; items: Item[]; demo: boolean };
+
+const DEMO: Loaded = { categories: seedCategories, items: seedItems, demo: true };
+
+async function load(): Promise<Loaded> {
   const db = publicClient();
-  if (!db) return { categories: seedCategories, items: seedItems };
+  if (!db) return DEMO;
 
   const [cats, items] = await Promise.all([
     db.from("categories").select("*").eq("active", true).order("sort"),
@@ -15,7 +19,22 @@ async function load(): Promise<{ categories: Category[]; items: Item[] }> {
   ]);
   if (cats.error) throw cats.error;
   if (items.error) throw items.error;
-  return { categories: cats.data as Category[], items: items.data as Item[] };
+
+  const categories = cats.data as Category[];
+  const list = items.data as Item[];
+  // Banco conectado mas ainda sem nenhum prato visível: mostra os pratos de exemplo
+  // em vez de uma página vazia. Some sozinho quando o primeiro prato é publicado no painel.
+  const hasDish = list.some((i) => categories.some((c) => c.id === i.category_id));
+  if (!hasDish) return DEMO;
+  return { categories, items: list, demo: false };
+}
+
+/** true enquanto o site mostra os pratos de exemplo (sem Supabase ou sem pratos cadastrados). */
+export async function isDemoMenu(): Promise<boolean> {
+  "use cache";
+  cacheTag(MENU_TAG);
+  cacheLife("hours");
+  return (await load()).demo;
 }
 
 export async function getMenu(): Promise<MenuSection[]> {

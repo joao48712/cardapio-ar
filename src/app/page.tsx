@@ -1,11 +1,12 @@
+import Link from "next/link";
 import { CategoryNav } from "@/components/CategoryNav";
 import { ItemCard } from "@/components/ItemCard";
 import { MenuHeader } from "@/components/MenuHeader";
-import { getMenu } from "@/lib/menu";
+import { getMenu, isDemoMenu } from "@/lib/menu";
 import { RESTAURANT } from "@/lib/restaurant";
 
 export default async function MenuPage() {
-  const menu = await getMenu();
+  const [menu, demo] = await Promise.all([getMenu(), isDemoMenu()]);
   const firstIds = new Set(menu.flatMap((c) => c.items).slice(0, 4).map((i) => i.id));
 
   return (
@@ -17,6 +18,16 @@ export default async function MenuPage() {
           Pratos com o selo <span className="font-semibold text-accent">AR</span> aparecem na sua mesa, no tamanho real,
           pela câmera do celular.
         </p>
+        {demo && (
+          <p className="mt-5 rounded-[var(--radius)] border border-line px-4 py-3 text-sm leading-relaxed text-muted">
+            <span className="font-semibold text-ink">Cardápio de demonstração.</span> Estes pratos são exemplos e somem
+            quando o primeiro prato for cadastrado no{" "}
+            <Link href="/admin" className="text-accent underline">
+              painel
+            </Link>
+            .
+          </p>
+        )}
       </header>
 
       {menu.length > 0 && <CategoryNav categories={menu.map((c) => ({ slug: c.slug, name: c.name }))} />}
