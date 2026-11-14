@@ -1,7 +1,11 @@
-# Cardápio 3D/AR
+# Cardápio AR
 
-Cardápio do restaurante com cada prato em 3D e em realidade aumentada no celular, sem instalar app.
+Cardápio do restaurante com realidade aumentada: o cliente vê o prato na mesa, no tamanho real, pela câmera do celular. Sem instalar app.
 Next.js 16 + Supabase + `<model-viewer>`, hospedado na Vercel.
+
+- Site: https://cardapio-ar-six.vercel.app
+- Painel: https://cardapio-ar-six.vercel.app/admin
+- Publicação: cada `git push` na `main` publica sozinho na Vercel.
 
 ## Rodar local
 
