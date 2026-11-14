@@ -37,6 +37,7 @@ export function View() {
   const [mv, setMv] = useState<ModelViewerElement | null>(null);
   const [realWidth, setRealWidth] = useState("");
   const [modelFile, setModelFile] = useState<File | null>(null);
+  const [textureFiles, setTextureFiles] = useState<File[]>([]);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -66,11 +67,11 @@ export function View() {
 
   useEffect(() => () => { if (modelPreview) URL.revokeObjectURL(modelPreview); }, [modelPreview]);
 
-  const processModel = useCallback(async (file: File, widthCm: number | null) => {
+  const processModel = useCallback(async (file: File, textures: File[], widthCm: number | null) => {
     setError(null);
     setStatus("Otimizando o modelo 3D… pode levar alguns segundos.");
     try {
-      const result = await optimizeGlb(file, { realWidthCm: widthCm });
+      const result = await optimizeGlb(file, { realWidthCm: widthCm, textures });
       setModel(result);
       setModelPreview(URL.createObjectURL(result.blob));
       setMv(null);
@@ -87,14 +88,19 @@ export function View() {
     setPhoto(await resizeImage(file, 1600));
   }
 
-  async function onModel(file: File | undefined) {
-    if (!file) return;
-    if (!file.name.toLowerCase().endsWith(".glb")) {
+  async function onModel(files: FileList | null) {
+    const all = Array.from(files ?? []);
+    if (all.length === 0) return;
+    const file = all.find((f) => f.name.toLowerCase().endsWith(".glb"));
+    if (!file) {
       setError("Envie um arquivo .glb (exporte em GLB no RealityScan ou Polycam).");
       return;
     }
+    // O resto da seleção são as texturas, quando o app exporta as imagens fora do .glb
+    const textures = all.filter((f) => f !== file);
     setModelFile(file);
-    await processModel(file, null);
+    setTextureFiles(textures);
+    await processModel(file, textures, null);
   }
 
   async function upload(bucket: "photos" | "models", path: string, blob: Blob, contentType: string) {
@@ -237,9 +243,10 @@ export function View() {
       <div className="flex flex-col gap-4">
         <fieldset className="rounded-[var(--radius)] border border-line p-4">
           <legend className="px-1 text-sm">Modelo 3D (.glb)</legend>
-          <input type="file" accept=".glb,model/gltf-binary" onChange={(e) => onModel(e.target.files?.[0])} className="text-sm" />
+          <input type="file" multiple accept=".glb,model/gltf-binary,image/png,image/jpeg,image/webp" onChange={(e) => onModel(e.target.files)} className="text-sm" />
           <p className="mt-2 text-xs text-muted">
-            Exporte em GLB no RealityScan ou Polycam. O painel reduz o arquivo e põe a base do prato no chão.{" "}
+            Exporte em GLB no RealityScan ou Polycam. O painel reduz o arquivo e põe a base do prato no chão. Se o app
+            exportar as texturas em imagens separadas, selecione o .glb e as imagens juntos.{" "}
             <Link href="/admin/guia-captura" className="text-accent underline">Guia de captura</Link>
           </p>
 
@@ -259,7 +266,7 @@ export function View() {
               <button
                 type="button"
                 className="btn btn-ghost"
-                onClick={() => processModel(modelFile, parseFloat(realWidth.replace(",", ".")) || null)}
+                onClick={() => processModel(modelFile, textureFiles, parseFloat(realWidth.replace(",", ".")) || null)}
               >
                 Ajustar escala
               </button>
