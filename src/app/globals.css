@@ -1,0 +1,110 @@
+@import "tailwindcss";
+
+/*
+  Tokens da marca. Troque aqui quando chegarem as cores do restaurante.
+  Tema escuro, quente e sóbrio (estilo "sofisticado").
+*/
+:root {
+  --bg: #12100e;
+  --surface: #1b1815;
+  --surface-2: #24201c;
+  --line: #3a342d;
+  --ink: #f2ece3;
+  --muted: #b3a999;
+  --accent: #c9a46a;
+  --accent-ink: #1a140b;
+  --danger: #e0786a;
+  --radius: 14px;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-danger: var(--danger);
+  --font-display: var(--font-display);
+  --font-sans: var(--font-body);
+  --radius-card: var(--radius);
+}
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 72px;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body), system-ui, sans-serif;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+/* Botões: sobem no hover, afundam no clique */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 48px;
+  padding: 0 1.25rem;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 0.95rem;
+  transition: transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1), background-color 160ms ease, border-color 160ms ease;
+  user-select: none;
+}
+.btn:active { transform: scale(0.97); }
+.btn-primary { background: var(--accent); color: var(--accent-ink); }
+.btn-primary:hover { background: color-mix(in oklab, var(--accent) 88%, white); }
+.btn-ghost { border: 1px solid var(--line); color: var(--ink); }
+.btn-ghost:hover { border-color: var(--muted); }
+.btn:disabled { opacity: 0.5; pointer-events: none; }
+
+/* Foto que dá um leve zoom dentro do quadro */
+.zoom-frame { overflow: hidden; }
+.zoom-frame img { transition: transform 500ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+@media (hover: hover) {
+  .card-link:hover .zoom-frame img { transform: scale(1.03); }
+  .card-link:hover { transform: translateY(-2px); }
+}
+.card-link { transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+
+.field {
+  width: 100%;
+  min-height: 44px;
+  padding: 0.6rem 0.8rem;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--ink);
+  font-size: 16px; /* evita zoom no iPhone */
+}
+.field:focus { border-color: var(--accent); outline: none; }
+
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0ms !important;
+    animation-duration: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+}
