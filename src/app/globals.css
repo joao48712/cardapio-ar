@@ -1,19 +1,20 @@
 @import "tailwindcss";
 
 /*
-  Tokens da marca. Troque aqui quando chegarem as cores do restaurante.
-  Tema escuro, quente e sóbrio (estilo "sofisticado").
+  Tokens da marca Restaurante 153, medidos no logo (public/brand/logo-153.png):
+  fundo marrom #32211a e dourado #bfa067 → #eecf8c.
+  Contraste conferido: textos ≥ 5.8:1 sobre fundo e cartões.
 */
 :root {
-  --bg: #12100e;
-  --surface: #1b1815;
-  --surface-2: #24201c;
-  --line: #3a342d;
-  --ink: #f2ece3;
-  --muted: #b3a999;
-  --accent: #c9a46a;
-  --accent-ink: #1a140b;
-  --danger: #e0786a;
+  --bg: #32211a;
+  --surface: #3d2a21;
+  --surface-2: #4a352a;
+  --line: #5e4738;
+  --ink: #f6ede0;
+  --muted: #c9b79f;
+  --accent: #dcbc7c;
+  --accent-ink: #2a1a12;
+  --danger: #f0907f;
   --radius: 14px;
 }
 
@@ -43,6 +44,12 @@ body {
   color: var(--ink);
   font-family: var(--font-body), system-ui, sans-serif;
   text-rendering: optimizeLegibility;
+}
+
+/* Logo sobre fundo texturizado: some nas bordas para não mostrar o quadrado */
+.logo-fade {
+  -webkit-mask-image: radial-gradient(closest-side, #000 64%, transparent 100%);
+  mask-image: radial-gradient(closest-side, #000 64%, transparent 100%);
 }
 
 ::selection {

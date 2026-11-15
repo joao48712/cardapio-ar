@@ -11,15 +11,16 @@ export default async function MenuPage() {
 
   return (
     <>
-      <header className="mx-auto w-full max-w-3xl px-4 pt-10 pb-6 sm:pt-14">
+      <header className="mx-auto flex w-full max-w-3xl flex-col items-center px-4 pt-8 pb-6 text-center sm:pt-12">
         <MenuHeader />
-        <h1 className="mt-6 font-display text-4xl leading-[1.05] font-medium sm:text-5xl">Cardápio</h1>
-        <p className="mt-3 max-w-md text-[15px] leading-relaxed text-muted">
+        <h1 className="mt-4 font-display text-4xl leading-[1.05] font-medium sm:text-5xl">Cardápio</h1>
+        <p className="mt-2 font-display text-lg text-accent italic">{RESTAURANT.tagline}</p>
+        <p className="mt-4 max-w-md text-[15px] leading-relaxed text-muted">
           Pratos com o selo <span className="font-semibold text-accent">AR</span> aparecem na sua mesa, no tamanho real,
           pela câmera do celular.
         </p>
         {demo && (
-          <p className="mt-5 rounded-[var(--radius)] border border-line px-4 py-3 text-sm leading-relaxed text-muted">
+          <p className="mt-5 rounded-[var(--radius)] border border-line px-4 py-3 text-left text-sm leading-relaxed text-muted">
             <span className="font-semibold text-ink">Cardápio de demonstração.</span> Estes pratos são exemplos e somem
             quando o primeiro prato for cadastrado no{" "}
             <Link href="/admin" className="text-accent underline">
@@ -51,7 +52,7 @@ export default async function MenuPage() {
       </main>
 
       <footer className="border-t border-line py-8 text-center text-xs text-muted">
-        {RESTAURANT.name} · Pagamento no caixa
+        {RESTAURANT.name} · {RESTAURANT.city} · Pagamento no caixa
       </footer>
     </>
   );

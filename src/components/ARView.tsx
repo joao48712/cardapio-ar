@@ -78,7 +78,7 @@ export function ARView({ src, photo, alt, className = "" }: Props) {
 
   useEffect(() => {
     if (mode !== "desktop") return;
-    QRCode.toString(window.location.href, { type: "svg", margin: 1, color: { dark: "#12100e", light: "#ffffff" } }).then(setQr);
+    QRCode.toString(window.location.href, { type: "svg", margin: 1, color: { dark: "#2a1a12", light: "#ffffff" } }).then(setQr);
   }, [mode]);
 
   async function open() {

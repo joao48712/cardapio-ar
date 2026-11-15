@@ -15,7 +15,7 @@ export function View() {
     Promise.all(
       Array.from({ length: n }, (_, i) =>
         // ?mesa=N já fica no QR para o pedido pelo celular (fase 2) sem reimprimir
-        QRCode.toString(`${origin}/?mesa=${i + 1}`, { type: "svg", margin: 1, errorCorrectionLevel: "M", color: { dark: "#12100e", light: "#ffffff" } })
+        QRCode.toString(`${origin}/?mesa=${i + 1}`, { type: "svg", margin: 1, errorCorrectionLevel: "M", color: { dark: "#2a1a12", light: "#ffffff" } })
           .then((svg) => ({ n: i + 1, svg })),
       ),
     ).then(setCodes);
@@ -43,11 +43,19 @@ export function View() {
 
       <div className="mt-8 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 print:mt-0 print:grid-cols-3">
         {codes.map(({ n, svg }) => (
-          <div key={n} className="flex break-inside-avoid flex-col items-center rounded-xl bg-white p-4 text-center text-[#12100e]">
-            <p className="font-display text-lg font-semibold">{RESTAURANT.name}</p>
-            <div className="mt-2 w-full max-w-40" dangerouslySetInnerHTML={{ __html: svg }} />
-            <p className="mt-2 text-xs">Aponte a câmera e veja os pratos em 3D</p>
-            <p className="mt-1 text-sm font-semibold">Mesa {n}</p>
+          <div
+            key={n}
+            className="flex break-inside-avoid flex-col items-center rounded-xl bg-[#32211a] p-4 text-center text-[#f6ede0] [print-color-adjust:exact]"
+          >
+            {RESTAURANT.logo ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={RESTAURANT.logo} alt={RESTAURANT.name} className="logo-fade h-20 w-20" />
+            ) : (
+              <p className="font-display text-lg font-semibold">{RESTAURANT.name}</p>
+            )}
+            <div className="mt-1 w-full max-w-40 rounded-lg bg-white p-1.5" dangerouslySetInnerHTML={{ __html: svg }} />
+            <p className="mt-3 text-xs leading-snug text-[#c9b79f]">Aponte a câmera e veja o prato na sua mesa</p>
+            <p className="mt-1 font-display text-lg text-[#dcbc7c]">Mesa {n}</p>
           </div>
         ))}
       </div>
