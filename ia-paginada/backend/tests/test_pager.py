@@ -171,3 +171,30 @@ def test_tied_weights_t5_stay_consistent(tmp_path):
         a = full(ids).last_hidden_state
         b = empty(ids).last_hidden_state
     assert torch.allclose(a, b, atol=1e-5)
+
+
+def test_legacy_vae_attention_names(tmp_path):
+    """VAEs antigos salvam query/key/value/proj_attn; o modelo atual usa to_q/.../to_out.0."""
+    diffusers = pytest.importorskip("diffusers")
+    from accelerate import init_empty_weights
+    from safetensors.torch import load_file, save_file
+    torch.manual_seed(0)
+    kw = dict(block_out_channels=(32, 64), in_channels=3, out_channels=3, latent_channels=4,
+              down_block_types=("DownEncoderBlock2D",) * 2, up_block_types=("UpDecoderBlock2D",) * 2,
+              norm_num_groups=8)
+    full = diffusers.AutoencoderKL(**kw).eval()
+    full.save_pretrained(tmp_path)
+    f = tmp_path / "diffusion_pytorch_model.safetensors"
+    ren = {".to_q.": ".query.", ".to_k.": ".key.", ".to_v.": ".value.", ".to_out.0.": ".proj_attn."}
+    sd = {}
+    for k, v in load_file(f).items():
+        for a, b in ren.items():
+            k = k.replace(a, b)
+        sd[k] = v
+    save_file(sd, f)
+    with init_empty_weights(include_buffers=False):
+        empty = diffusers.AutoencoderKL(**kw).eval()
+    PagedModel(empty, CheckpointIndex(str(tmp_path)), "cpu", torch.float32, min_page_mb=0)
+    z = torch.randn(1, 4, 8, 8)
+    with torch.inference_mode():
+        assert torch.allclose(full.decode(z).sample, empty.decode(z).sample, atol=1e-5)

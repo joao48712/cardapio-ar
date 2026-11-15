@@ -423,9 +423,10 @@ class PagedModel:
         self.is_param.update({n: False for n in buffers if n not in params})
 
         # nome no modelo -> chave no checkpoint
+        alias = _legacy_aliases(model, index)
         self.key_of: Dict[str, str] = {}
         for name in list(params) + [b for b in buffers if b in persistent]:
-            key = _resolve_key(name, index, prefixes)
+            key = alias.get(name) or _resolve_key(name, index, prefixes)
             if key is not None:
                 self.key_of[name] = key
 
@@ -642,6 +643,23 @@ def _named_persistent_buffers(model: nn.Module):
         for b_name, buf in mod._buffers.items():
             if buf is not None and b_name not in skip:
                 yield (f"{mod_name}.{b_name}" if mod_name else b_name), buf
+
+
+def _legacy_aliases(model: nn.Module, index: CheckpointIndex) -> Dict[str, str]:
+    """Nomes antigos do checkpoint (ex.: VAE com query/key/value/proj_attn).
+
+    Usa a própria função de conversão do diffusers sobre um "state dict" de
+    nomes (chave -> chave), sem carregar nenhum peso.
+    """
+    fix = getattr(model, "_fix_state_dict_keys_on_load", None)
+    if fix is None:
+        return {}
+    try:
+        sd = {k: k for k in index.entries}
+        out = fix(sd) or sd
+        return {new: old for new, old in out.items() if new != old}
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 def _resolve_key(name: str, index: CheckpointIndex, prefixes: List[str]) -> Optional[str]:

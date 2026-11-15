@@ -191,6 +191,10 @@ class DiffusionModel(LoadedModel):
                 on_step(step + 1, total)
                 return cb_kwargs
             kw["callback_on_step_end"] = cb
+        elif "callback" in p:  # pipelines antigos (ex.: ModelScope text-to-video)
+            kw["callback"] = lambda step, _t, _lat: on_step(step + 1, total)
+            if "callback_steps" in p:
+                kw["callback_steps"] = 1
         with torch.inference_mode():
             result = self.pipe(**kw)
         if getattr(result, "frames", None) is not None:
