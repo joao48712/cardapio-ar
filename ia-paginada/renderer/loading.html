@@ -11,6 +11,13 @@
     <div class="book"><span></span><span></span><span></span></div>
     <h1>IA Paginada</h1>
     <p id="msg">Iniciando o motor Python…</p>
+    <div id="setup" hidden>
+      <p class="muted">Primeira vez: instalando o motor de IA (PyTorch e bibliotecas). Precisa de internet;
+        com placa NVIDIA o download é maior (~3 GB). Isso só acontece uma vez.</p>
+      <div class="bar"><div id="setupBar"></div></div>
+      <pre id="setupLog"></pre>
+      <button id="retry" hidden>Tentar de novo</button>
+    </div>
     <pre id="err" hidden></pre>
   </div>
   <script src="loading.js"></script>

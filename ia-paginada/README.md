@@ -139,7 +139,27 @@ repositório descomprime com estatísticas coerentes com os pesos bf16 da mesma 
 - Node.js 20+ e Python 3.10+
 - Opcional: GPU NVIDIA com CUDA ou Mac com Apple Silicon
 
-## Instalação
+## Instalador para Windows (.exe)
+
+`IA-Paginada-Setup-<versão>.exe` instala tudo: o app (Electron) e um Python 3.12 próprio — não
+precisa ter Python instalado. Ele cria atalhos na Área de Trabalho e no Menu Iniciar e tem
+desinstalador. Na **primeira vez que o app abre**, uma tela “Instalando o motor de IA” baixa o
+PyTorch e as bibliotecas (com placa NVIDIA instala a versão CUDA, ~3 GB; sem placa, a de CPU) —
+precisa de internet só nessa hora. Instale na pasta padrão (a do seu usuário): o motor é instalado
+dentro da pasta do app, e “Arquivos de Programas” não deixa gravar.
+
+Para gerar o instalador:
+
+```bash
+cd ia-paginada
+npm install
+npm run dist:win     # baixa o Python embutível do python.org e gera dist/IA-Paginada-Setup-*.exe
+```
+
+No Windows funciona direto. No Linux precisa do Wine (32 e 64 bits) para o NSIS montar o
+desinstalador.
+
+## Instalação (desenvolvimento)
 
 ```bash
 cd ia-paginada
@@ -175,6 +195,7 @@ Variáveis opcionais:
 ```
 ia-paginada/
 ├── electron/main.mjs        # janela + inicia o backend Python numa porta livre (com chave secreta)
+├── electron/runtime.mjs     # acha o Python (embutido ou venv) e faz a instalação da 1ª abertura
 ├── renderer/                # interface (HTML/CSS/JS puro)
 ├── backend/
 │   ├── bench.py             # mede a velocidade da troca de páginas

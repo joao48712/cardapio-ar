@@ -5,13 +5,15 @@ import crypto from "node:crypto";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { findPython, root } from "../scripts/python-path.mjs";
+import { root } from "../scripts/python-path.mjs";
+import { needsSetup, resolveRuntime, runSetup } from "./runtime.mjs";
 
 const HOME = process.env.IAPAG_HOME || path.join(os.homedir(), "IA-Paginada");
 const SECRET = crypto.randomBytes(24).toString("hex");
 let backend = null;
 let backendLog = "";
 let win = null;
+let rt = null;
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -25,10 +27,10 @@ function freePort() {
 }
 
 function startBackend(port) {
-  const python = findPython();
-  const script = path.join(root, "backend", "server.py");
+  const python = rt.python;
+  const script = path.join(rt.backend, "server.py");
   backend = spawn(python, ["-u", script, "--port", String(port), "--home", HOME], {
-    cwd: path.join(root, "backend"),
+    cwd: rt.backend,
     env: { ...process.env, IAPAG_SECRET: SECRET, IAPAG_HOME: HOME, PYTHONIOENCODING: "utf-8" },
   });
   const keep = (buf) => {
@@ -78,7 +80,39 @@ async function createWindow() {
     if (url.startsWith("https://")) shell.openExternal(url);
     return { action: "deny" };
   });
+  win.webContents.on("did-navigate", (_e, url) => {
+    if (url.includes("retry=1")) bootstrap();
+  });
   await win.loadFile(path.join(root, "renderer", "loading.html"));
+  await bootstrap();
+}
+
+let booting = false;
+async function bootstrap() {
+  if (booting) return;
+  booting = true;
+  try {
+    await boot();
+  } finally {
+    booting = false;
+  }
+}
+
+async function boot() {
+  rt = resolveRuntime(app);
+  if (needsSetup(rt)) {
+    // primeira abertura depois de instalar: baixa PyTorch e o restante
+    const js = (fn, ...a) => win && !win.isDestroyed() &&
+      win.webContents.executeJavaScript(`window.${fn} && window.${fn}(...${JSON.stringify(a)})`).catch(() => {});
+    js("setupStart");
+    try {
+      await runSetup(rt, (line) => js("setupLog", line), (n, total, title) => js("setupStep", n, total, title));
+    } catch (e) {
+      js("setupFail", String(e.message || e));
+      return;
+    }
+    js("setupDone");
+  }
 
   const port = await freePort();
   startBackend(port);

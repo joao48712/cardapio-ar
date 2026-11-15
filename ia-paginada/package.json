@@ -8,9 +8,80 @@
   "scripts": {
     "setup": "node scripts/setup.mjs",
     "start": "electron .",
-    "test:python": "node scripts/run-python.mjs -m pytest backend/tests -q"
+    "test:python": "node scripts/run-python.mjs -m pytest backend/tests -q",
+    "fetch-python:win": "node scripts/fetch-python-win.mjs",
+    "dist:win": "node scripts/fetch-python-win.mjs && electron-builder --win nsis --x64"
   },
   "devDependencies": {
-    "electron": "^38.0.0"
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.12",
+    "extract-zip": "^2.0.1"
+  },
+  "author": "IA Paginada",
+  "build": {
+    "appId": "app.iapaginada.desktop",
+    "productName": "IA Paginada",
+    "copyright": "IA Paginada",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build-resources"
+    },
+    "files": [
+      "electron/**",
+      "renderer/**",
+      "scripts/python-path.mjs",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "backend",
+        "to": "backend",
+        "filter": [
+          "**/*",
+          "!.venv/**",
+          "!tests/**",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!bench.py"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build-resources/icon.png",
+      "signAndEditExecutable": false,
+      "extraResources": [
+        {
+          "from": "build/python-win",
+          "to": "python"
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "IA Paginada",
+      "artifactName": "IA-Paginada-Setup-${version}.exe",
+      "uninstallDisplayName": "IA Paginada",
+      "deleteAppDataOnUninstall": false
+    },
+    "linux": {
+      "target": [
+        "dir"
+      ],
+      "icon": "build-resources/icon.png",
+      "category": "Utility"
+    },
+    "publish": null
   }
 }
