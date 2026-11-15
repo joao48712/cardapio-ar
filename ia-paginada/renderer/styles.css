@@ -117,3 +117,5 @@ th { color: var(--muted); font-weight: 500; width: 160px; }
 .speed label { margin-bottom: 4px; }
 .speed b { color: var(--accent); font-size: 14px; }
 .speed input[type=range] { width: 100%; padding: 0; accent-color: var(--accent); }
+
+.trust small { display: block; margin-top: 2px; }

@@ -108,7 +108,8 @@ def on_page_event(ev: dict) -> None:
         if seen[ev["label"]] <= ev["total"] or ev["ms"] > 2000:
             job.add_log(job.message)
     elif ev["type"] == "ready":
-        job.add_log(f"✅ {ev['label']}: {ev['pages']} páginas ({ev['store']}), "
+        xp = f", {ev['experts']} especialistas paginados um a um" if ev.get("experts") else ""
+        job.add_log(f"✅ {ev['label']}: {ev['pages']} páginas ({ev['store']}{xp}), "
                     f"{ev['resident_mb']} MB residentes")
     elif ev["type"] == "pack":
         job.progress = ev["progress"]
@@ -255,6 +256,8 @@ class LoadReq(BaseModel):
     pack: str = "auto"              # "auto": encaderna (converte 1 vez) | "off"
     min_page_mb: float = 1.0        # peças fora das camadas maiores que isso viram páginas
     resident_below_mb: float = 0.0  # componentes menores que isso ficam inteiros (0 = divide tudo)
+    trust_remote_code: bool = False  # modelos com código próprio (ex.: Kimi K3)
+    expert_cache_gb: float = 0.0     # especialistas de MoE mantidos na RAM
 
 
 @app.post("/api/load")
@@ -273,8 +276,13 @@ def load(req: LoadReq):
             try:
                 _unload_locked()
                 job.add_log(f"Montando {req.name} vazio (dispositivo meta)...")
+                if req.trust_remote_code:
+                    from paged.mxfp4_kernel import warmup
+                    job.add_log("Compilando o kernel MXFP4 (só na primeira vez)...")
+                    warmup()
                 m = load_any(path, req.device, req.dtype, on_page_event, req.prefetch, req.pack,
-                             req.min_page_mb, req.resident_below_mb)
+                             req.min_page_mb, req.resident_below_mb,
+                             req.trust_remote_code, req.expert_cache_gb)
                 STATE["model"], STATE["name"] = m, req.name
                 job.add_log(f"Pronto: {m.kind} em {m.device} ({str(m.dtype).replace('torch.', '')})")
                 return loaded_info()

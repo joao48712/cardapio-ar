@@ -124,6 +124,12 @@ async function showPlan(repo) {
           el("button", { class: "primary", onclick: () => startDownload(repo) }, `Baixar ${gb(p.bytes)}`),
           el("button", { onclick: () => (box.hidden = true) }, "Fechar"))),
       p.gated ? el("p", { class: "warn" }, "Modelo restrito: aceite os termos no site e informe seu token.") : null,
+      p.remote_code ? el("p", { class: "warn" },
+        "Este modelo traz código Python próprio: para carregar, marque “Confiar no código do modelo” em Meus modelos.") : null,
+      p.quantization === "mxfp4" ? el("p", { class: "muted" },
+        "Pesos em MXFP4 (4 bits): o app multiplica direto nos bytes comprimidos, especialista por especialista.") : null,
+      state.diskFree && p.bytes > state.diskFree ? el("p", { class: "error" },
+        `Não cabe no disco: precisa de ${gb(p.bytes)} e há ${gb(state.diskFree)} livres em ${state.home}.`) : null,
       el("details", {}, el("summary", {}, "Arquivos"), files),
     );
   } catch (e) {
@@ -196,6 +202,8 @@ async function loadModel(name) {
       name, device: $("device").value, dtype: $("dtype").value,
       prefetch: Number($("prefetch").value) || 0, pack: $("pack").value,
       min_page_mb: Number($("minPageMb").value) || 0,
+      trust_remote_code: $("trustCode").checked,
+      expert_cache_gb: Number($("expertCache").value) || 0,
       resident_below_mb: Number($("residentMb").value) || 0,
     });
     showTab("run");
@@ -405,6 +413,8 @@ async function refreshSystem() {
     ];
     $("sysInfo").replaceChildren(el("table", {}, ...rows.map(([k, v]) => el("tr", {}, el("th", {}, k), el("td", {}, v)))));
     $("homeInfo").textContent = `Modelos ficam em ${s.home}/models`;
+    state.diskFree = s.disk_free;
+    state.home = s.home;
     const jobs = await api("/api/jobs");
     $("jobList").replaceChildren(...(jobs.length ? jobs.map((j) =>
       el("div", { class: "job" }, el("span", { class: `st ${j.status}` }, j.status), el("b", {}, j.kind), el("span", {}, j.title),

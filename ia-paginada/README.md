@@ -90,6 +90,33 @@ dobra o tamanho); desligue-a na tela “Meus modelos” se faltar espaço.
 - 🖨️ **Impressora de páginas**: visualização ao vivo de qual página de cada componente está
   carregada, quantas leituras e quantos MB já passaram.
 
+## 🌙 Kimi K3 (2,8 trilhões de parâmetros) e outros MoE
+
+O app roda o `moonshotai/Kimi-K3` no estilo do AirLLM (camada por camada), mas indo além:
+**especialista por especialista**.
+
+| O que | Como |
+|---|---|
+| **Páginas por especialista** | Cada camada é uma página e cada um dos 896 especialistas dela é uma página própria. Por palavra, só os 16 escolhidos pelo roteador são lidos (o AirLLM leria a camada inteira, com os 896). |
+| **O roteador dispara a leitura** | Assim que o gate escolhe os especialistas, todos começam a vir do disco em paralelo, antes do primeiro rodar. |
+| **Kernel MXFP4 sem descompressão** | Os especialistas do K3 estão em 4 bits (MXFP4). Um kernel compilado (Numba) multiplica direto nos bytes comprimidos: 3 ms por especialista real numa CPU de 4 núcleos, contra 81 ms descomprimindo. |
+| **KDA na CPU** | A atenção KDA do Kimi só existe em kernels de GPU (biblioteca `fla`). O app traz a mesma matemática em PyTorch puro (`paged/fla_cpu.py`), conferida contra as referências da própria `fla`. |
+| **Compatibilidade** | O código da Moonshot foi escrito para o transformers 4.56; o app ajusta o que mudou no 5.x (máscara causal, `tie_weights`, geração) sem editar o código do modelo. |
+
+Para usar: baixe `moonshotai/Kimi-K3` em “Baixar modelos”, marque **Confiar no código do modelo**
+em “Meus modelos” (o modelo traz código Python próprio) e carregue.
+
+**Expectativa realista.** São ~1,4 TB de download. Por palavra o modelo usa 104 bilhões de
+parâmetros: ~25 GB de especialistas em 4 bits + ~114 GB de atenção/especialistas compartilhados em
+bf16. Num PC com SSD NVMe rápido isso dá algo como **20 a 60 segundos por palavra** (o disco é o
+limite); com muita RAM (128 GB+) parte fica no cache do sistema e acelera; com SSD SATA ou HD fica
+muito mais lento. Funciona, mas não é para conversa em tempo real.
+
+Testado com um Kimi K3 em miniatura (`backend/tests/tiny_kimi.py`): mesma arquitetura e código
+oficiais, especialistas em MXFP4 no formato do arquivo real. Paginado = referência (logits e
+tokens gerados iguais). Os pesos reais também foram conferidos: um especialista baixado do
+repositório descomprime com estatísticas coerentes com os pesos bf16 da mesma camada.
+
 ## Requisitos
 
 - Node.js 20+ e Python 3.10+
@@ -137,6 +164,9 @@ ia-paginada/
 │   ├── server.py            # API local (FastAPI) — tarefas, download, carregar, gerar
 │   ├── paged/pager.py       # ⭐ o carregador página-por-página
 │   ├── paged/loaders.py     # monta modelos de texto (transformers) e imagem/vídeo (diffusers)
+│   ├── paged/fla_cpu.py     # atenção KDA (Kimi) em PyTorch puro, para CPU
+│   ├── paged/mxfp4.py       # formato MXFP4 (4 bits) do compressed-tensors
+│   ├── paged/mxfp4_kernel.py # multiplicação direto nos bytes de 4 bits (Numba)
 │   ├── paged/speed.py       # variável Velocidade (pula passos reaproveitando saídas)
 │   ├── paged/hub.py         # busca/planos/download no Hugging Face (modelos e Spaces)
 │   └── tests/               # prova que o resultado paginado = resultado do modelo inteiro
@@ -147,6 +177,8 @@ ia-paginada/
 
 ```bash
 npm run test:python
+# teste com a arquitetura oficial do Kimi K3 (código baixado do Hugging Face):
+IAPAG_KIMI_CODE=/pasta/com/codigo/do/kimi npm run test:python
 ```
 
 Os testes montam modelos minúsculos (Llama, Stable Diffusion) e verificam que a saída paginada é

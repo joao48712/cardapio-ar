@@ -14,3 +14,7 @@ pillow
 psutil
 imageio
 imageio-ffmpeg
+# Kimi K3 e outros modelos MoE em MXFP4 / com código próprio
+numba          # kernel que multiplica direto nos pesos de 4 bits
+einops
+tiktoken

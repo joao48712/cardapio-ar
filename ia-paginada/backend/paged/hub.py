@@ -71,6 +71,7 @@ def plan(repo_id: str, revision: Optional[str] = None, prefer_fp16: bool = True,
     sib = {s.rfilename: (s.size or 0) for s in info.siblings or []}
     names = list(sib)
     is_diffusers = "model_index.json" in sib
+    custom_code = "custom_code" in (getattr(info, "tags", None) or [])
     has_st = any(n.endswith(".safetensors") for n in names)
     if not has_st:
         raise ValueError("Este repositório não tem arquivos .safetensors (formato exigido "
@@ -80,7 +81,7 @@ def plan(repo_id: str, revision: Optional[str] = None, prefer_fp16: bool = True,
     for n in names:
         if n.endswith(SKIP_EXT) or not n.endswith(KEEP_EXT):
             continue
-        if n.endswith(".py") and not is_diffusers:
+        if n.endswith(".py") and not (is_diffusers or custom_code):
             continue
         d = os.path.dirname(n)
         if is_diffusers and d == "" and n.endswith(".safetensors"):
@@ -104,8 +105,13 @@ def plan(repo_id: str, revision: Optional[str] = None, prefer_fp16: bool = True,
     if kind is None:
         raise ValueError("Formato não suportado: escolha um repositório no formato Diffusers "
                          "(imagem/vídeo, procure o sufixo “-Diffusers”) ou Transformers (texto).")
+    quant = None
+    if any(f.endswith(".safetensors.index.json") for f in chosen) or "config.json" in sib:
+        tags = getattr(info, "tags", None) or []
+        quant = "mxfp4" if "compressed-tensors" in tags else None
     return {"repo_id": repo_id, "files": sorted(chosen), "bytes": total, "kind": kind,
-            "task": info.pipeline_tag, "gated": bool(getattr(info, "gated", False))}
+            "task": info.pipeline_tag, "gated": bool(getattr(info, "gated", False)),
+            "remote_code": custom_code, "quantization": quant}
 
 
 def local_name(repo_id: str) -> str:

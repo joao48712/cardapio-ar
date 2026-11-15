@@ -28,6 +28,7 @@ import os
 import struct
 import threading
 import time
+from collections import OrderedDict
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
@@ -226,24 +227,35 @@ class DirectStore:
 
 
 class PackedStore:
-    """Arquivo "encadernado": tensores já convertidos, alinhados e na ordem das páginas."""
+    """Arquivo "encadernado": tensores já convertidos, alinhados e na ordem das páginas.
+
+    Só os tensores que precisam de conversão vão para a encadernação; os demais
+    (ex.: pesos MXFP4 em uint8, ou já no tipo certo) são lidos do original.
+    """
 
     kind = "encadernado"
     zero_copy = True
 
-    def __init__(self, path: str, meta: dict):
+    def __init__(self, path: str, meta: dict, index: Optional["CheckpointIndex"] = None):
         self.path = path
         self.meta = meta["tensors"]
         self.file = MmapFile(path)
+        self.index = index
 
     def get(self, key: str) -> torch.Tensor:
-        off, _, dt, shape = self.meta[key]
+        e = self.meta.get(key)
+        if e is None:
+            return self.index.view(key)
+        off, _, dt, shape = e
         return self.file.view(off, ST_DTYPES[dt], shape)
 
     def willneed(self, keys: Iterable[str]) -> None:
         for k in keys:
-            off, nb, _, _ = self.meta[k]
-            self.file.willneed(off, nb)
+            e = self.meta.get(k)
+            if e is None:
+                self.index.willneed(k)
+            else:
+                self.file.willneed(e[0], e[1])
 
     def close(self) -> None:
         self.file.close()
@@ -256,17 +268,20 @@ class PackedStore:
 
     @classmethod
     def open_or_build(cls, index: CheckpointIndex, dtype: torch.dtype, order: List[str],
-                      on_progress: Optional[Callable[[float], None]] = None) -> "PackedStore":
+                      on_progress: Optional[Callable[[float], None]] = None,
+                      only: Optional[set] = None) -> "PackedStore":
         bin_p, meta_p = cls.paths(index, dtype)
         fp = index.fingerprint()
         if os.path.exists(bin_p) and os.path.exists(meta_p):
             with open(meta_p, encoding="utf-8") as fh:
                 meta = json.load(fh)
             if meta.get("version") == PACK_VERSION and meta.get("source") == fp:
-                return cls(bin_p, meta)
+                return cls(bin_p, meta, index)
         os.makedirs(os.path.dirname(bin_p), exist_ok=True)
         keys = list(dict.fromkeys(list(order) + sorted(index.entries)))  # ordem das páginas
-        total = max(1, index.total_bytes)
+        if only is not None:
+            keys = [k for k in keys if k in only]
+        total = max(1, sum(index.entries[k][2] for k in keys))
         done = 0
         last = -1.0
         tensors = {}
@@ -298,23 +313,40 @@ class PackedStore:
             json.dump(meta, fh)
         if on_progress:
             on_progress(1.0)
-        return cls(bin_p, meta)
+        return cls(bin_p, meta, index)
 
 
-def needs_conversion(index: CheckpointIndex, dtype: torch.dtype) -> bool:
+def _conversion_keys(index: CheckpointIndex, dtype: torch.dtype) -> set:
+    out = set()
     for k, (_, _, _, dt, _) in index.entries.items():
         t = ST_DTYPES[dt]
         if (t.is_floating_point and t != dtype) or not index.aligned(k):
-            return True
-    return False
+            out.add(k)
+    return out
+
+
+def needs_conversion(index: CheckpointIndex, dtype: torch.dtype) -> bool:
+    return bool(_conversion_keys(index, dtype))
 
 
 def make_store(index: CheckpointIndex, dtype: torch.dtype, pack: str, order: List[str],
                on_progress=None):
-    """pack: 'auto' (encaderna se precisar converter), 'off' (converte a cada leitura)."""
-    if pack == "off" or not needs_conversion(index, dtype):
+    """pack: 'auto' (encaderna se precisar converter), 'off' (converte a cada leitura).
+
+    Se a encadernação não couber no disco, converte a cada leitura.
+    """
+    conv = _conversion_keys(index, dtype)
+    if pack == "off" or not conv:
         return DirectStore(index, dtype)
-    return PackedStore.open_or_build(index, dtype, order, on_progress)
+    need = sum(_numel(index.entries[k][4]) * dtype.itemsize for k in conv)
+    try:
+        import shutil
+        free = shutil.disk_usage(index.folder).free
+    except OSError:
+        free = need * 2
+    if need > free * 0.9:
+        return DirectStore(index, dtype)
+    return PackedStore.open_or_build(index, dtype, order, on_progress, only=conv)
 
 
 # --------------------------------------------------------------------------- #
@@ -340,26 +372,57 @@ def _set_tensor(root: nn.Module, name: str, value: torch.Tensor, is_param: bool)
         mod._buffers[leaf] = value
 
 
-def _find_page_prefixes(model: nn.Module) -> List[str]:
-    """Páginas principais = filhos das ModuleList mais externas (camadas/blocos)."""
+EXPERT_LIST_MIN = 8  # ModuleList dentro de uma camada com >= 8 itens = especialistas (MoE)
+
+
+def _find_page_prefixes(model: nn.Module) -> Tuple[List[str], List[str]]:
+    """Páginas = filhos das ModuleList mais externas (camadas/blocos).
+
+    Dentro de cada camada, listas grandes (especialistas de MoE) viram páginas
+    próprias: só os especialistas escolhidos pelo roteador são lidos.
+    Retorna (páginas, listas de especialistas).
+    """
     lists = [n for n, m in model.named_modules() if isinstance(m, nn.ModuleList) and len(m) >= 2]
-    outer = [n for n in lists if not any(n != o and n.startswith(o + ".") for o in lists)]
+    outer = [n for n in lists if "." not in n or not any(n != o and n.startswith(o + ".") for o in lists)]
+    outer = [n for n in outer if not any(n != o and n.startswith(o + ".") for o in outer)]
     pages: List[str] = []
     for n in outer:
         for i, _ in enumerate(model.get_submodule(n)):
             pages.append(f"{n}.{i}")
-    return pages
+    expert_lists = [n for n in lists if n not in outer and len(model.get_submodule(n)) >= EXPERT_LIST_MIN
+                    and any(n.startswith(o + ".") for o in outer)]
+    expert_lists = [n for n in expert_lists
+                    if not any(n != o and n.startswith(o + ".") for o in expert_lists)]
+    for n in expert_lists:
+        for i, _ in enumerate(model.get_submodule(n)):
+            pages.append(f"{n}.{i}")
+    return pages, expert_lists
 
 
 def _under(name: str, prefix: str) -> bool:
     return name == prefix or name.startswith(prefix + ".")
 
 
+class _PageLookup:
+    """Acha a página mais específica de um nome em O(profundidade)."""
+
+    def __init__(self, prefixes: List[str]):
+        self.idx = {p: i for i, p in enumerate(prefixes)}
+
+    def __call__(self, name: str) -> int:
+        cur = name
+        while True:
+            i = self.idx.get(cur)
+            if i is not None:
+                return i
+            cut = cur.rfind(".")
+            if cut < 0:
+                return -1
+            cur = cur[:cut]
+
+
 def _page_of(name: str, prefixes: List[str]) -> int:
-    for i, p in enumerate(prefixes):
-        if _under(name, p):
-            return i
-    return -1
+    return _PageLookup(prefixes)(name)
 
 
 # --------------------------------------------------------------------------- #
@@ -392,6 +455,9 @@ class PagedModel:
         min_page_mb: float = 1.0,
         on_event: Optional[EventFn] = None,
         label: str = "modelo",
+        expert_cache_gb: float = 0.0,
+        expert_workers: int = 0,
+        mxfp4_direct: bool = True,
     ):
         self.model = model
         self.index = index
@@ -407,10 +473,20 @@ class PagedModel:
         self._last: Optional[int] = None
         self.stats = {"label": label, "pages": 0, "loads": 0, "bytes_read": 0, "current": None,
                       "last_ms": 0.0, "avg_ms": 0.0, "resident_bytes": 0, "store": "",
-                      "zero_copy": False, "learned": 0}
+                      "zero_copy": False, "learned": 0, "experts": 0, "expert_loads": 0,
+                      "expert_cache_hits": 0, "expert_prefetched": 0}
+        self._xfutures: Dict[int, Future] = {}  # leituras pedidas pelo roteador
+        nw = expert_workers or min(8, os.cpu_count() or 2)
+        self._xpool = ThreadPoolExecutor(max_workers=nw, thread_name_prefix="experts")
+        self._xcache: "OrderedDict[int, Dict[str, torch.Tensor]]" = OrderedDict()
+        self._xcache_bytes = 0
+        self._xcache_budget = int(expert_cache_gb * 2**30)
+        self._xlock = threading.Lock()
         self._ms_total = 0.0
 
         prefixes = [getattr(model, "base_model_prefix", "") or ""]
+        # Lineares gravadas em MXFP4: troca por MXFP4Linear (multiplica direto nos bytes)
+        self.mxfp4_modules = _swap_mxfp4_linears(model, index, prefixes) if mxfp4_direct else 0
         # amarra pesos compartilhados (ex.: T5 shared = embed_tokens) ANTES de
         # decidir as páginas, para que o compartilhamento seja visível
         if hasattr(model, "tie_weights"):
@@ -425,30 +501,48 @@ class PagedModel:
         # nome no modelo -> chave no checkpoint
         alias = _legacy_aliases(model, index)
         self.key_of: Dict[str, str] = {}
+        # pesos comprimidos em MXFP4: nome -> (weight_packed, weight_scale)
+        self.packed: Dict[str, Tuple[str, str]] = {}
         for name in list(params) + [b for b in buffers if b in persistent]:
             key = alias.get(name) or _resolve_key(name, index, prefixes)
+            if key is None and name.endswith(".weight"):
+                base = name[: -len("weight")]
+                for cand in (base, *(f"{p}.{base}" for p in prefixes if p)):
+                    if cand + "weight_packed" in index and cand + "weight_scale" in index:
+                        key = cand + "weight_packed"
+                        self.packed[name] = (key, cand + "weight_scale")
+                        break
             if key is not None:
                 self.key_of[name] = key
 
-        # --- páginas: camadas + peças grandes fora delas
-        page_prefixes = _find_page_prefixes(model) if paged else []
+        # --- páginas: camadas, especialistas (MoE) e peças grandes fora delas
         if paged:
-            page_prefixes += self._extra_pages(model, params, page_prefixes, min_page_mb)
+            page_prefixes, self.expert_lists = _find_page_prefixes(model)
+            look = _PageLookup(page_prefixes)
+            page_prefixes += self._extra_pages(model, params, look, min_page_mb)
+        else:
+            page_prefixes, self.expert_lists = [], []
         self.page_prefixes = page_prefixes
+        self._lookup = _PageLookup(page_prefixes)
         self.page_names: List[List[str]] = [[] for _ in page_prefixes]
         resident: List[str] = []
         for name in self.key_of:
-            i = _page_of(name, page_prefixes)
+            i = self._lookup(name)
             (self.page_names[i] if i >= 0 else resident).append(name)
+        xl = tuple(n + "." for n in self.expert_lists)
+        self._is_expert = [bool(xl) and p.startswith(xl) for p in page_prefixes]
+        self._has_packed = [any(n in self.packed for n in names) for names in self.page_names]
+        self.stats["experts"] = sum(self._is_expert)
 
         missing = [n for n in params if n not in self.key_of]
-        bad = [n for n in missing if _page_of(n, page_prefixes) >= 0]
+        bad = [n for n in missing if self._lookup(n) >= 0]
         if bad:
             raise KeyError(f"{label}: {len(bad)} pesos de páginas não encontrados no "
                            f"checkpoint, ex.: {bad[:5]}")
 
         # --- fonte dos pesos (direta sem cópia, ou encadernada)
-        order = [self.key_of[n] for n in resident] + [self.key_of[n] for names in self.page_names for n in names]
+        order = [self.key_of[n] for n in resident] + [
+            self.key_of[n] for names in self.page_names for n in names if n not in self.packed]
 
         def pack_progress(frac):
             self._emit({"type": "pack", "progress": round(frac, 3)})
@@ -464,7 +558,7 @@ class PagedModel:
 
         # 2) pesos residentes
         for name in resident:
-            t = self._to_device(self.store.get(self.key_of[name]))
+            t = self._to_device(self._get(name))
             self.stats["resident_bytes"] += t.numel() * t.element_size()
             _set_tensor(model, name, t, self.is_param[name])
 
@@ -473,7 +567,7 @@ class PagedModel:
             with contextlib.suppress(Exception):
                 model.tie_weights()
         still_meta = [n for n, p in model.named_parameters()
-                      if p.device.type == "meta" and _page_of(n, page_prefixes) < 0]
+                      if p.device.type == "meta" and self._lookup(n) < 0]
         if still_meta:
             raise KeyError(f"{label}: pesos ausentes no checkpoint: {still_meta[:5]}")
 
@@ -486,10 +580,47 @@ class PagedModel:
             self._handles.append(mod.register_forward_pre_hook(self._make_pre(i)))
             self._handles.append(mod.register_forward_hook(self._make_post(i)))
         self.stats["pages"] = len(page_prefixes)
+        self._hook_routers()
         self._emit({"type": "ready", "pages": len(page_prefixes), "store": self.store.kind,
+                    "experts": self.stats["experts"],
                     "resident_mb": round(self.stats["resident_bytes"] / 2**20, 1)})
 
-    def _extra_pages(self, model, params, layer_pages, min_page_mb) -> List[str]:
+    # ------------------------------------------------------- roteador (MoE)
+    def _hook_routers(self) -> None:
+        """Quando o roteador escolhe os especialistas, já começa a lê-los em paralelo."""
+        for lst in self.expert_lists:
+            parent_name = lst.rpartition(".")[0]
+            parent = self.model.get_submodule(parent_name) if parent_name else self.model
+            gate = getattr(parent, "gate", None) or getattr(parent, "router", None)
+            if not isinstance(gate, nn.Module):
+                continue
+            base = self._lookup.idx.get(f"{lst}.0", -1)
+            if base < 0:
+                continue
+            n = len(self.model.get_submodule(lst))
+
+            def hook(_m, _a, out, base=base, n=n):
+                idx = out[0] if isinstance(out, (tuple, list)) else out
+                if not (isinstance(idx, torch.Tensor) and not idx.is_floating_point()):
+                    return
+                for e in torch.unique(idx).tolist():
+                    if 0 <= e < n:
+                        self._prefetch_expert(base + e)
+
+            self._handles.append(gate.register_forward_hook(hook))
+
+    def _prefetch_expert(self, i: int) -> None:
+        with self._lock:
+            if self._loaded[i] or i in self._xfutures:
+                return
+            if self.device.type == "cpu" and self.store.zero_copy and not self._has_packed[i]:
+                # janela sem cópia: só pede ao sistema para trazer do disco
+                self.store.willneed(self.key_of[n] for n in self.page_names[i])
+            else:
+                self._xfutures[i] = self._xpool.submit(self._materialize, i)
+            self.stats["expert_prefetched"] += 1
+
+    def _extra_pages(self, model, params, look, min_page_mb) -> List[str]:
         """Peças grandes fora das camadas (embedding, cabeça, convs) viram páginas.
 
         Só módulos-folha (Linear, Embedding, Conv...) cujo peso pertence a eles e
@@ -500,7 +631,7 @@ class PagedModel:
             ids[id(p)] = ids.get(id(p), 0) + 1
         size: Dict[str, int] = {}
         for name, p in params.items():
-            if _page_of(name, layer_pages) >= 0:
+            if look(name) >= 0:
                 continue
             owner = name.rpartition(".")[0]
             mod = model.get_submodule(owner) if owner else model
@@ -535,23 +666,51 @@ class PagedModel:
             return t
         return t.to(self.device, non_blocking=self.device.type == "cuda" and t.is_pinned())
 
+    def _get(self, name: str) -> torch.Tensor:
+        pk = self.packed.get(name)
+        if pk is not None:  # MXFP4 -> denso
+            from .mxfp4 import dequantize
+            return dequantize(self.index.view(pk[0]), self.index.view(pk[1]), self.dtype)
+        return self.store.get(self.key_of[name])
+
     def _materialize(self, i: int) -> Dict[str, torch.Tensor]:
-        """Lê a página para a RAM (usado quando há cópia: GPU ou conversão)."""
+        """Lê a página para a RAM (usado quando há cópia: GPU, conversão ou MXFP4)."""
+        if self._xcache_budget:
+            with self._xlock:
+                hit = self._xcache.get(i)
+                if hit is not None:
+                    self._xcache.move_to_end(i)
+                    self.stats["expert_cache_hits"] += 1
+                    return hit
         out = {}
         for n in self.page_names[i]:
-            t = self.store.get(self.key_of[n])
+            t = self._get(n)
             if self.device.type == "cuda":
                 t = t.pin_memory()
-            elif not self.store.zero_copy:
+            elif not (self.store.zero_copy or n in self.packed):
                 t = t.contiguous()
             out[n] = t
+        if self._xcache_budget and self._is_expert[i]:
+            size = sum(t.numel() * t.element_size() for t in out.values())
+            with self._xlock:
+                while self._xcache and self._xcache_bytes + size > self._xcache_budget:
+                    _, old = self._xcache.popitem(last=False)
+                    self._xcache_bytes -= sum(t.numel() * t.element_size() for t in old.values())
+                if size <= self._xcache_budget:
+                    self._xcache[i] = out
+                    self._xcache_bytes += size
         return out
 
     def _predict(self, i: int) -> List[int]:
         n = len(self.page_prefixes)
         out, j = [], i
         for _ in range(min(self.prefetch, n - 1)):
-            j = self._next.get(j, (j + 1) % n)
+            nxt = self._next.get(j)
+            if nxt is None:  # ainda não aprendeu: próxima página que não é especialista
+                nxt = (j + 1) % n
+                while self._is_expert[nxt] and nxt != i:
+                    nxt = (nxt + 1) % n
+            j = nxt
             if j == i or j in out:
                 break
             out.append(j)
@@ -559,16 +718,18 @@ class PagedModel:
 
     def _load_page(self, i: int) -> None:
         t0 = time.perf_counter()
-        if self._last is not None and self._last != i:
-            if self._next.get(self._last) != i:
-                self._next[self._last] = i
-                self.stats["learned"] = len(self._next)
-        self._last = i
-        fast = self.device.type == "cpu" and self.store.zero_copy
+        expert = self._is_expert[i]
+        if not expert:  # especialistas mudam a cada token: não entram na ordem aprendida
+            if self._last is not None and self._last != i:
+                if self._next.get(self._last) != i:
+                    self._next[self._last] = i
+                    self.stats["learned"] = len(self._next)
+            self._last = i
+        fast = self.device.type == "cpu" and self.store.zero_copy and not self._has_packed[i]
         if fast:  # janelas sobre o arquivo: nada a copiar
             tensors = {n: self.store.get(self.key_of[n]) for n in self.page_names[i]}
         else:
-            fut = self._futures.pop(i, None)
+            fut = self._xfutures.pop(i, None) or self._futures.pop(i, None)
             tensors = fut.result() if fut is not None else self._materialize(i)
         nbytes = 0
         for name, t in tensors.items():
@@ -578,8 +739,10 @@ class PagedModel:
         self._loaded[i] = True
 
         # leitura antecipada das próximas páginas (na ordem aprendida)
-        nxt = self._predict(i)
-        if fast:
+        nxt = [] if expert else self._predict(i)
+        if expert:
+            pass
+        elif fast:
             for j in nxt:
                 self.store.willneed(self.key_of[n] for n in self.page_names[j])
         else:
@@ -593,6 +756,8 @@ class PagedModel:
         ms = (time.perf_counter() - t0) * 1000
         st = self.stats
         st["loads"] += 1
+        if expert:
+            st["expert_loads"] += 1
         st["bytes_read"] += nbytes
         st["current"] = i
         st["last_ms"] = round(ms, 3)
@@ -619,15 +784,18 @@ class PagedModel:
                 self._depth[i] = 0
                 if loaded:
                     self._unload_page(i)
-            for f in self._futures.values():
+            for f in list(self._futures.values()) + list(self._xfutures.values()):
                 f.cancel()
             self._futures.clear()
+            self._xfutures.clear()
 
     def close(self) -> None:
         self.reset()
         for h in self._handles:
             h.remove()
         self._pool.shutdown(wait=False, cancel_futures=True)
+        self._xpool.shutdown(wait=False, cancel_futures=True)
+        self._xcache.clear()
         self.store.close()
 
     def _emit(self, ev: dict) -> None:
@@ -635,6 +803,27 @@ class PagedModel:
             ev["label"] = self.label
             with contextlib.suppress(Exception):
                 self.on_event(ev)
+
+
+def _swap_mxfp4_linears(model: nn.Module, index: "CheckpointIndex", prefixes: List[str]) -> int:
+    """Troca nn.Linear cujo peso está em MXFP4 no arquivo por MXFP4Linear."""
+    from .mxfp4_kernel import HAVE_NUMBA, MXFP4Linear
+    if not HAVE_NUMBA:
+        return 0  # sem o kernel: o paginador descomprime na leitura
+    n = 0
+    for name, mod in list(model.named_modules()):
+        if type(mod) is not nn.Linear or mod.in_features % 32:
+            continue
+        cands = [name] + [f"{p}.{name}" for p in prefixes if p]
+        if any(f"{c}.weight" in index for c in cands):
+            continue
+        if not any(f"{c}.weight_packed" in index for c in cands):
+            continue
+        parent_name, _, leaf = name.rpartition(".")
+        parent = model.get_submodule(parent_name) if parent_name else model
+        setattr(parent, leaf, MXFP4Linear(mod.in_features, mod.out_features, mod.bias is not None))
+        n += 1
+    return n
 
 
 def _named_persistent_buffers(model: nn.Module):

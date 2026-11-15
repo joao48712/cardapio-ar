@@ -76,9 +76,16 @@
             <select id="pack"><option value="auto">Automática (converte 1 vez, troca de página sem cópia)</option><option value="off">Desligada (converte a cada leitura, sem usar disco extra)</option></select></label>
           <label>Peças soltas viram página acima de (MB)
             <input id="minPageMb" type="number" min="0" step="1" value="1" title="Embeddings, cabeça de saída, convs fora das camadas" /></label>
+          <label>Cache de especialistas MoE (GB)
+            <input id="expertCache" type="number" min="0" step="1" value="0" title="Só quando o kernel MXFP4 não está disponível: guarda especialistas já descomprimidos na RAM. Com o kernel, o cache de disco do sistema já faz isso." /></label>
           <label>Componentes inteiros abaixo de (MB)
             <input id="residentMb" type="number" min="0" step="50" value="0" title="0 = divide todos os componentes em páginas" /></label>
         </div>
+      </div>
+      <div class="card trust">
+        <label class="check"><input id="trustCode" type="checkbox" /> Confiar no código do modelo</label>
+        <small class="muted">Necessário para modelos que trazem código Python próprio, como o <b>Kimi K3</b>.
+          Esse código roda no seu computador: só marque para modelos de fontes em que você confia.</small>
       </div>
       <div id="modelList" class="list"></div>
     </section>
