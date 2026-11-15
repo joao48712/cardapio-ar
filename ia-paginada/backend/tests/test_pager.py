@@ -291,3 +291,26 @@ def test_speed_huge_value_on_pipeline(tmp_path):
     assert Image.open(out).size == (128, 128)  # pediu 128, calculou menor e ampliou
     info = m.last_speed_info
     assert info["internal"].startswith("64x64") and info["computed"] == 3 and info["at_floor"]
+
+
+def test_speculative_identical_with_rollback(tmp_path):
+    """Palpites (meio errados de propósito) conferidos em lote = geração normal."""
+    import random
+    from paged.loaders import manual_generate
+    from paged.speculative import propose, speculative_generate
+    _tiny_llama(tmp_path, tie=False)
+    empty = _empty_llama(tmp_path)
+    PagedModel(empty, CheckpointIndex(str(tmp_path)), "cpu", torch.float32)
+    torch.manual_seed(3)
+    ids = torch.randint(0, 256, (1, 10))
+    truth = manual_generate(empty, ids, 30)[0].tolist()
+    rnd = random.Random(0)
+
+    def oracle(cur, k):
+        return [t if rnd.random() > 0.3 else 5 for t in truth[len(cur):len(cur) + k]]
+
+    st = {}
+    out = speculative_generate(empty, ids, 30, stats=st, proposer=oracle)
+    assert out[0].tolist() == truth
+    assert st["accepted"] > 0 and st["passes"] < 30
+    assert propose([1, 2, 3, 9, 1, 2], 3) == [3, 9, 1]

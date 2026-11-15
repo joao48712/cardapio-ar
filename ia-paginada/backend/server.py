@@ -337,6 +337,7 @@ class GenReq(BaseModel):
     prompt: str
     system: str = ""
     max_new_tokens: int = 256
+    speculative: int = 6  # palpites conferidos por passada (0 = desliga); resultado idêntico
     temperature: float = 0.7
     top_p: float = 0.95
     negative_prompt: str = ""
@@ -377,8 +378,12 @@ def generate(req: GenReq):
 
                     out = m.generate(req.prompt, on_text, max_new_tokens=req.max_new_tokens,
                                      temperature=req.temperature, top_p=req.top_p,
-                                     system=req.system,
+                                     system=req.system, speculative=req.speculative,
                                      stopping_criteria=StoppingCriteriaList([Stop()]))
+                    sp = getattr(m, "last_spec", {}) or {}
+                    if sp.get("drafted"):
+                        job.add_log(f"⚡ Especulação: {sp['accepted']}/{sp['drafted']} palpites aceitos, "
+                                    f"{sp['passes']} passadas pelo modelo")
                     job.add_log(f"Texto gerado em {time.time() - t0:.1f}s")
                     return {"text": out}
                 image = _decode_image(req.image) if req.image else None

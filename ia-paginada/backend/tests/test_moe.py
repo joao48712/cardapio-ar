@@ -223,3 +223,28 @@ def test_kimi_k3_tiny_paged_matches_reference(tmp_path):
         assert torch.allclose(ref(input_ids=ids).logits, m.model(input_ids=ids).logits, atol=1e-4)
     assert torch.equal(manual_generate(m.model, ids, 8), gref)
     assert p.stats["expert_prefetched"] == p.stats["expert_loads"] > 0
+
+
+@pytest.mark.skipif(not (KIMI_CODE and glob.glob(os.path.join(KIMI_CODE, "modeling_kimi_k3.py"))),
+                    reason="defina IAPAG_KIMI_CODE com o código oficial do Kimi K3")
+def test_kimi_k3_speculative_rollback_exact(tmp_path):
+    """Rollback da KDA/conv/MLA após palpites rejeitados: saída idêntica."""
+    import random
+    sys.path.insert(0, os.path.dirname(__file__))
+    import tiny_kimi
+    from paged.loaders import load_text, manual_generate
+    from paged.speculative import speculative_generate
+    tiny_kimi.build(KIMI_CODE, str(tmp_path / "k3"))
+    m = load_text(str(tmp_path / "k3"), torch.device("cpu"), torch.float32, None, trust_remote_code=True)
+    torch.manual_seed(2)
+    ids = torch.randint(4, 160000, (1, 12))
+    truth = manual_generate(m.model, ids, 30)[0].tolist()
+    rnd = random.Random(1)
+
+    def oracle(cur, k):
+        return [t if rnd.random() > 0.25 else 7 for t in truth[len(cur):len(cur) + k]]
+
+    st = {}
+    out = speculative_generate(m.model, ids, 30, stats=st, proposer=oracle)
+    assert out[0].tolist() == truth
+    assert st["passes"] < 30 and st["accepted"] > 0

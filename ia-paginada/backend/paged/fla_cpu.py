@@ -41,6 +41,20 @@ def prepare_cu_seqlens_from_mask(mask: torch.Tensor, dtype=torch.int32) -> torch
 
 
 # --------------------------------------------------------------------------- #
+# Gravação para a decodificação especulativa: guarda as entradas já
+# transformadas de cada chamada, para depois refazer o estado só até o último
+# token aceito (sem reler pesos).
+# --------------------------------------------------------------------------- #
+class Recorder:
+    def __init__(self):
+        self.kda = []   # por chamada: (q, k, v, g, beta, scale, state_v_first)
+        self.conv = []  # por chamada: entrada x [B, T, D]
+
+
+RECORDER = None  # type: Optional[Recorder]
+
+
+# --------------------------------------------------------------------------- #
 # KDA
 # --------------------------------------------------------------------------- #
 def _kda_gate(g, A_log, dt_bias, lower_bound):
@@ -96,6 +110,8 @@ def _kda(q, k, v, g, beta, A_log=None, dt_bias=None, scale=None, initial_state=N
     def from_kv(s):
         return s.transpose(-1, -2).contiguous() if state_v_first else s
 
+    if RECORDER is not None and cu_seqlens is None:
+        RECORDER.kda.append((q, k, v, g, beta, scale, state_v_first))
     if cu_seqlens is None:
         o, S = _kda_segment(q, k, v, g, beta, scale, to_kv(initial_state))
         return o.to(dtype), (from_kv(S) if output_final_state else None)
@@ -152,6 +168,8 @@ class ShortConvolution(nn.Conv1d):
                 cu_seqlens=None, **kwargs) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         if mask is not None:
             x = x * mask.unsqueeze(-1)
+        if RECORDER is not None and cu_seqlens is None:
+            RECORDER.conv.append(x)
         if cu_seqlens is None:
             y, state = self._conv(x, cache)
         else:
@@ -196,6 +214,21 @@ class FusedRMSNormGated(nn.Module):
         gf = g.float()
         y = y * (torch.sigmoid(gf) if self.activation == "sigmoid" else F.silu(gf))
         return y.to(dtype)
+
+
+def replay_kda_state(rec, n: int, state):
+    """Estado KDA depois dos primeiros n tokens gravados, partindo de ``state``."""
+    q, k, v, g, beta, scale, v_first = rec
+    s0 = None if state is None else (state.transpose(-1, -2) if v_first else state)
+    _, S = _kda_segment(q[:, :n], k[:, :n], v[:, :n], g[:, :n], beta[:, :n], scale, s0)
+    return S.transpose(-1, -2).contiguous() if v_first else S
+
+
+def replay_conv_state(x, n: int, state, width: int):
+    B, _, D = x.shape
+    prev = state if state is not None else x.new_zeros(B, D, width)
+    seq = torch.cat([prev.to(x.dtype), x[:, :n].transpose(1, 2)], dim=-1)
+    return seq[..., -width:].contiguous()
 
 
 # --------------------------------------------------------------------------- #

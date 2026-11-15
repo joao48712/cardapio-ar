@@ -154,8 +154,12 @@ class TextModel(LoadedModel):
         self.tokenizer = tokenizer
 
     def generate(self, prompt: str, on_text: Callable[[str], None], max_new_tokens=256,
-                 temperature=0.7, top_p=0.95, system: str = "", stopping_criteria=None, **_):
+                 temperature=0.7, top_p=0.95, system: str = "", stopping_criteria=None,
+                 speculative: int = 6, **_):
+        """speculative: quantos tokens de palpite conferir por passada (0 = desliga).
+        Não muda o resultado; só acelera quando os palpites acertam."""
         from transformers import TextIteratorStreamer
+        self.last_spec = {}
 
         tok = self.tokenizer
         if getattr(tok, "chat_template", None):
@@ -174,6 +178,8 @@ class TextModel(LoadedModel):
             kw.update(do_sample=True, temperature=float(temperature), top_p=float(top_p))
         else:
             kw.update(do_sample=False)
+        if int(speculative) > 0:
+            kw["prompt_lookup_num_tokens"] = int(speculative)  # palpites conferidos em lote
         err: List[BaseException] = []
 
         def run():
@@ -186,7 +192,7 @@ class TextModel(LoadedModel):
 
         if not hasattr(self.model, "generate"):
             return self._generate_manual(inputs["input_ids"], on_text, max_new_tokens,
-                                         temperature, top_p, stopping_criteria)
+                                         temperature, top_p, stopping_criteria, int(speculative))
         th = threading.Thread(target=run, daemon=True)
         th.start()
         full = ""
@@ -199,7 +205,8 @@ class TextModel(LoadedModel):
         return full
 
 
-    def _generate_manual(self, input_ids, on_text, max_new_tokens, temperature, top_p, stopping):
+    def _generate_manual(self, input_ids, on_text, max_new_tokens, temperature, top_p, stopping,
+                         speculative: int = 0):
         tok = self.tokenizer
         n0 = input_ids.shape[1]
         eos = [tok.eos_token_id, getattr(self.model.config, "eos_token_id", None)]
@@ -209,8 +216,14 @@ class TextModel(LoadedModel):
         def emit(ids):
             on_text(tok.decode(ids[0, n0:], skip_special_tokens=True))
 
-        ids = manual_generate(self.model, input_ids, max_new_tokens, float(temperature),
-                              float(top_p), eos, stop, emit)
+        if speculative > 0:
+            from .speculative import speculative_generate
+            ids = speculative_generate(self.model, input_ids, max_new_tokens, float(temperature),
+                                       float(top_p), eos, stop, emit, max_draft=speculative,
+                                       stats=self.last_spec)
+        else:
+            ids = manual_generate(self.model, input_ids, max_new_tokens, float(temperature),
+                                  float(top_p), eos, stop, emit)
         return tok.decode(ids[0, n0:], skip_special_tokens=True)
 
 

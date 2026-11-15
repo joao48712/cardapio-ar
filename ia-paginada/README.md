@@ -42,6 +42,23 @@ Medido com `python backend/bench.py` (Llama de 16 camadas, checkpoint em fp16, C
 Quando o modelo é maior que a RAM, o limite passa a ser a velocidade do disco: a leitura antecipada
 mantém o SSD ocupado enquanto a CPU calcula.
 
+### ⚡ Palpites por passada (texto) — mais rápido sem perder qualidade
+
+Num modelo paginado, cada passada lê todas as páginas; conferir 6 tokens numa passada custa quase
+o mesmo que gerar 1. O app propõe tokens copiando trechos que já apareceram no texto (sem outro
+modelo) e o modelo confere todos de uma vez; aceita enquanto batem com a escolha dele.
+O resultado é o mesmo da geração normal — em fp32 idêntico token a token (testado); em bf16 um
+empate praticamente exato entre duas palavras pode cair para o outro lado, por arredondamento.
+No Kimi K3 o estado da atenção KDA é refeito só até o último token aceito, sem reler pesos, e o
+tamanho do palpite se adapta (no MoE, palpite errado custa especialistas a mais).
+
+| Tarefa (Qwen2.5-0.5B paginado, CPU) | normal | com palpites |
+|---|---:|---:|
+| Copiar/reescrever um texto | 3,74 s | **1,05 s (3,6×)** |
+| Escrever código + explicação | 7,06 s | 6,76 s (1,04×) |
+
+Ganha muito em código, resumos, reescritas e respostas que citam o texto; pouco em texto livre.
+
 ### ⚡ Variável “Velocidade” (imagem e vídeo)
 
 A troca de página já custa < 1 ms; numa geração de 205 s, as trocas somam ~1 s. O tempo está no

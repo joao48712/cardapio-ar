@@ -305,6 +305,7 @@ $("genForm").addEventListener("submit", async (ev) => {
   const body = {
     prompt, system: $("system").value, max_new_tokens: +$("maxTokens").value,
     temperature: +$("temperature").value, top_p: +$("topP").value,
+    speculative: Math.max(0, +$("speculative").value || 0),
     negative_prompt: $("negative").value, steps: +$("steps").value, guidance: +$("guidance").value,
     width: +$("width").value, height: +$("height").value, frames: +$("frames").value,
     fps: +$("fps").value, seed: +$("seed").value, image: await readImage(),
