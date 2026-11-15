@@ -101,7 +101,7 @@ export function ARView({ src, photo, alt, className = "" }: Props) {
             src={src}
             alt={alt}
             ar
-            ar-modes="webxr scene-viewer quick-look"
+            ar-modes="scene-viewer quick-look webxr"
             ar-scale="fixed"
             ar-placement="floor"
             loading="eager"

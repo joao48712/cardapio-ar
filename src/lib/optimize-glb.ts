@@ -20,8 +20,10 @@ import { MeshoptDecoder, MeshoptSimplifier } from "meshoptimizer";
 export type OptimizeOptions = {
   /** Triângulos máximos depois de simplificar. */
   maxTriangles?: number;
-  /** Lado máximo das texturas, em pixels. */
+  /** Lado máximo da textura de cor, em pixels. */
   maxTexture?: number;
+  /** Lado máximo das texturas de detalhe (relevo, rugosidade, oclusão). */
+  maxDetailTexture?: number;
   /** Largura real do prato em cm. Se vier, o modelo é escalado para esse tamanho. */
   realWidthCm?: number | null;
   /** Imagens de textura exportadas ao lado do .glb (quando o app não embute as texturas). */
@@ -145,7 +147,14 @@ export async function inspectGlb(file: Blob): Promise<ModelInfo> {
 }
 
 export async function optimizeGlb(file: Blob, opts: OptimizeOptions = {}): Promise<OptimizeResult> {
-  const { maxTriangles = 60_000, maxTexture = 2048, realWidthCm = null, textures = [] } = opts;
+  // 40k triângulos e relevo em 1024 px: roda liso em Android intermediário (testado no AR)
+  const {
+    maxTriangles = 40_000,
+    maxTexture = 2048,
+    maxDetailTexture = 1024,
+    realWidthCm = null,
+    textures = [],
+  } = opts;
   await MeshoptSimplifier.ready;
 
   const { reader, doc } = await read(file, textures);
@@ -165,9 +174,15 @@ export async function optimizeGlb(file: Blob, opts: OptimizeOptions = {}): Promi
   }
 
   await doc.transform(
-    textureCompress({ targetFormat: "jpeg", resize: [maxTexture, maxTexture], quality: 85 }),
+    // Cor do prato: mantém a nitidez
+    textureCompress({ slots: /^baseColorTexture$/, targetFormat: "jpeg", resize: [maxTexture, maxTexture], quality: 85 }),
+    // Relevo, rugosidade e oclusão: quase não aparecem na mesa, então podem ser menores
+    textureCompress({ slots: /^(?!baseColorTexture$).*$/, targetFormat: "jpeg", resize: [maxDetailTexture, maxDetailTexture], quality: 85 }),
     prune(),
   );
+
+  // Fotogrametria fecha a superfície: desenhar o lado de dentro só gasta GPU
+  for (const material of doc.getRoot().listMaterials()) material.setDoubleSided(false);
 
   // Escala para o tamanho real, se pedido (usa a maior medida horizontal)
   if (realWidthCm && realWidthCm > 0) {

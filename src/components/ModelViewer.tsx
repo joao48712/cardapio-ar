@@ -70,7 +70,7 @@ export function ModelViewer({ src, poster, alt, deferred = true, className = "",
           poster={poster ?? undefined}
           alt={alt}
           ar
-          ar-modes="webxr scene-viewer quick-look"
+          ar-modes="scene-viewer quick-look webxr"
           ar-scale="fixed"
           ar-placement="floor"
           camera-controls
