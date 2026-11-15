@@ -162,6 +162,27 @@ class DiffusionModel(LoadedModel):
         self.step_caches = install(pipe)
         self.last_speed_info: Dict[str, Any] = {}
 
+    def default_size(self):
+        pipe = self.pipe
+        h = getattr(pipe, "default_height", None)
+        w = getattr(pipe, "default_width", None)
+        if h and w:
+            return int(w), int(h)
+        den = getattr(pipe, "unet", None) or getattr(pipe, "transformer", None)
+        cfg = getattr(den, "config", None)
+        size = getattr(cfg, "sample_size", None) if cfg is not None else None
+        vsf = getattr(pipe, "vae_scale_factor", None) or getattr(pipe, "vae_scale_factor_spatial", 8)
+        if isinstance(size, (list, tuple)):
+            size = size[0]
+        if isinstance(size, int) and isinstance(vsf, int):
+            return size * vsf, size * vsf
+        return 0, 0
+
+    def default_frames(self) -> int:
+        prm = inspect.signature(self.pipe.__call__).parameters.get("num_frames")
+        d = prm.default if prm is not None else None
+        return int(d) if isinstance(d, int) else 0
+
     def supports_speed(self) -> bool:
         return bool(self.step_caches) and bool({"callback_on_step_end", "callback"} & self.call_params)
 
@@ -172,8 +193,20 @@ class DiffusionModel(LoadedModel):
                  negative_prompt: str = "", steps: int = 25, guidance: float = 5.0,
                  width: int = 0, height: int = 0, frames: int = 0, fps: int = 16,
                  seed: int = -1, image=None, speed: float = 1.0, **_):
-        from .speed import plan_steps
+        from .speed import split_speed, upscale_image, upscale_video
         p = self.call_params
+        speed = max(1.0, float(speed or 1))
+        want_w, want_h = int(width or 0), int(height or 0)
+        want_f = int(frames or 0)
+        if speed > 1:  # tamanhos padrão do pipeline, para poder reduzir por dentro
+            dw, dh = self.default_size()
+            want_w, want_h = want_w or dw, want_h or dh
+            if self.kind == "video":
+                want_f = want_f or self.default_frames()
+        sp = split_speed(speed, int(steps), want_w, want_h, want_f, self.default_frames(),
+                         can_skip_steps=self.supports_speed())
+        if speed > 1:
+            width, height, frames = sp["width"], sp["height"], sp["frames"]
         kw: Dict[str, Any] = {"prompt": prompt}
         if negative_prompt and "negative_prompt" in p:
             kw["negative_prompt"] = negative_prompt
@@ -193,8 +226,7 @@ class DiffusionModel(LoadedModel):
         if int(seed) >= 0:
             kw["generator"] = torch.Generator(gen_device).manual_seed(int(seed))
         total = int(steps)
-        speed = max(1.0, float(speed or 1))
-        plan = plan_steps(total, speed) if self.supports_speed() and speed > 1 else None
+        plan = sp["plan"] if self.supports_speed() and speed > 1 else None
         for c in self.step_caches:
             c.start(plan)
 
@@ -217,7 +249,10 @@ class DiffusionModel(LoadedModel):
                 result = self.pipe(**kw)
         finally:
             self.last_speed_info = {
-                "speed": speed if plan else 1.0,
+                "speed": speed,
+                "estimated_gain": sp["estimated_gain"] if speed > 1 else 1.0,
+                "at_floor": bool(sp["at_floor"]) if speed > 1 else False,
+                "internal": f"{width or '?'}x{height or '?'}" + (f", {frames} quadros" if frames else ""),
                 "computed": sum(c.computed for c in self.step_caches),
                 "reused": sum(c.reused for c in self.step_caches),
             }
@@ -226,10 +261,16 @@ class DiffusionModel(LoadedModel):
         if getattr(result, "frames", None) is not None:
             from diffusers.utils import export_to_video
             out_path = os.path.splitext(out_path)[0] + ".mp4"
-            export_to_video(result.frames[0], out_path, fps=int(fps))
+            vid = result.frames[0]
+            if speed > 1 and ((want_w, want_h) != (width, height) or (want_f and want_f != frames)):
+                vid = upscale_video(vid, want_w, want_h, want_f)
+            export_to_video(vid, out_path, fps=int(fps))
         else:
             out_path = os.path.splitext(out_path)[0] + ".png"
-            result.images[0].save(out_path)
+            img = result.images[0]
+            if speed > 1 and want_w and want_h:
+                img = upscale_image(img, want_w, want_h)
+            img.save(out_path)
         return out_path
 
 

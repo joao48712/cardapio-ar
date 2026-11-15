@@ -114,3 +114,78 @@ def install(pipe) -> List[StepCache]:
         if isinstance(mod, torch.nn.Module):
             caches.append(StepCache(mod, name))
     return caches
+
+
+# --------------------------------------------------------------------------- #
+# Velocidade sem teto: depois dos passos, o excedente vai para resolução e quadros
+# --------------------------------------------------------------------------- #
+MIN_SIDE = 64      # menor lado calculado internamente (px)
+MIN_FRAMES = 5     # menos quadros que isso o modelo de vídeo não aguenta
+
+
+def _round_side(x: float, mult: int = 16) -> int:
+    return max(MIN_SIDE, int(x) // mult * mult)
+
+
+def _round_frames(n: float, default: int) -> int:
+    n = max(MIN_FRAMES, int(n))
+    for mod in (8, 4):  # LTX usa 8k+1, Wan usa 4k+1
+        if default and default % mod == 1:
+            return max(MIN_FRAMES, (n - 1) // mod * mod + 1)
+    return n
+
+
+def split_speed(speed: float, steps: int, width: int, height: int, frames: int,
+                default_frames: int = 0, can_skip_steps: bool = True) -> dict:
+    """Distribui a velocidade pedida entre passos, resolução e quadros.
+
+    Retorna o plano interno e o ganho estimado (passos x área x quadros).
+    """
+    speed = max(1.0, float(speed))
+    plan = plan_steps(steps, speed) if can_skip_steps else [True] * int(steps)
+    computed = max(1, sum(plan))
+    step_gain = steps / computed
+    rest = speed / step_gain
+    w, h, f = width, height, frames
+    area_gain = frame_gain = 1.0
+    if rest > 1.05 and width and height:
+        s = rest ** 0.5
+        w, h = _round_side(width / s), _round_side(height / s)
+        area_gain = (width * height) / (w * h)
+        rest /= area_gain
+    if rest > 1.05 and frames:
+        f = _round_frames(frames / rest, default_frames)
+        frame_gain = frames / f
+    return {"plan": plan, "steps_computed": computed, "width": w, "height": h, "frames": f,
+            "estimated_gain": round(step_gain * area_gain * frame_gain, 2),
+            "at_floor": speed > step_gain * area_gain * frame_gain * 1.05}
+
+
+def upscale_image(img, width: int, height: int):
+    from PIL import Image
+    return img.resize((width, height), Image.LANCZOS) if img.size != (width, height) else img
+
+
+def upscale_video(frames, width: int, height: int, n_out: int):
+    """Amplia cada quadro e interpola para chegar a n_out quadros."""
+    import numpy as np
+    from PIL import Image
+    arr = []
+    for fr in frames:
+        a = np.asarray(fr)
+        if a.dtype != np.uint8:
+            a = (np.clip(a, 0, 1) * 255).round().astype(np.uint8)
+        im = Image.fromarray(a)
+        if width and height and im.size != (width, height):
+            im = im.resize((width, height), Image.LANCZOS)
+        arr.append(np.asarray(im, dtype=np.float32) / 255.0)
+    n_in = len(arr)
+    if n_out and n_out != n_in and n_in > 1:
+        out = []
+        for k in range(n_out):
+            x = k * (n_in - 1) / (n_out - 1)
+            i = min(int(x), n_in - 2)
+            t = x - i
+            out.append(arr[i] * (1 - t) + arr[i + 1] * t)
+        arr = out
+    return arr

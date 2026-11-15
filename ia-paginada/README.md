@@ -51,7 +51,13 @@ principal (UNet/transformer) só é recalculado em ~1 de cada N passos; nos outr
 cálculo é reaproveitada e nenhuma página é carregada. Os 2 primeiros passos e o último são sempre
 calculados. `1` = idêntico ao normal.
 
-- No app: controle ⚡ Velocidade na tela **Gerar** (campo livre + barra).
+Acima do ganho que os passos permitem (~passos÷3), o excedente vai para **resolução interna**
+(calcula menor e amplia para o tamanho pedido) e depois para **quadros** (calcula menos e interpola).
+Assim cada aumento continua acelerando até o **piso físico**: 3 passos, 64 px e poucos quadros.
+Nenhuma configuração deixa a CPU ou a RAM mais rápidas que o hardware; a variável acelera porque
+manda o computador fazer menos contas.
+
+- No app: controle ⚡ Velocidade na tela **Gerar** (campo livre + barra), com a divisão do ganho.
 - Na API: campo `speed` em `POST /api/generate`.
 - Padrão global: variável de ambiente `IAPAG_SPEED` (ex.: `IAPAG_SPEED=2 npm start`).
 

@@ -246,6 +246,7 @@ function setLoaded(info) {
   if (img) img.hidden = !info?.accepts_image;
   const sp = document.querySelector("[data-speed]");
   if (sp) sp.hidden = !info?.supports_speed;
+  speedHint();
   $("genBtn").disabled = !info;
   renderPress(info?.pagers || []);
 }
@@ -341,15 +342,42 @@ $("genForm").addEventListener("submit", async (ev) => {
 
 // ------------------------------------------------------------- velocidade
 function speedHint() {
+  // Mesmo cálculo do backend (paged/speed.py: split_speed)
   const v = Math.max(1, +$("speed").value || 1);
   const steps = Math.max(1, +$("steps").value || 1);
-  const computed = Math.min(steps, Math.ceil(Math.max(0, steps - 3) / v) + 3);
+  const L = state.loaded || {};
+  const [dw, dh] = L.default_size || [0, 0];
+  const W = +$("width").value || dw, H = +$("height").value || dh;
+  const F = L.kind === "video" ? (+$("frames").value || L.default_frames || 0) : 0;
+  let computed = steps;
+  if (L.can_skip_steps !== false && v > 1 && steps > 3) {
+    computed = 0; let acc = 0;
+    for (let s = 0; s < steps; s++) {
+      if (s < 2 || s === steps - 1) { computed++; continue; }
+      acc += 1 / v;
+      if (acc >= 1 - 1e-9) { computed++; acc -= 1; }
+    }
+  }
+  const stepGain = steps / computed;
+  let rest = v / stepGain, w = W, h = H, f = F, area = 1, fg = 1;
+  const side = (x) => Math.max(64, Math.floor(x / 16) * 16);
+  if (rest > 1.05 && W && H) {
+    const s = Math.sqrt(rest); w = side(W / s); h = side(H / s);
+    area = (W * H) / (w * h); rest /= area;
+  }
+  if (rest > 1.05 && F) { f = Math.max(5, Math.floor(F / rest)); fg = F / f; }
+  const gain = stepGain * area * fg;
   $("speedVal").textContent = `${v}×`;
-  $("speedHint").textContent = v <= 1
-    ? "Qualidade máxima: todas as páginas em todos os passos."
-    : `≈ ${computed} de ${steps} passos calculados (até ~${(steps / computed).toFixed(1)}× mais rápido). ` +
-      (v > 4 ? "Acima de 4× a qualidade cai bastante." : "Pouca perda de qualidade.");
+  if (v <= 1) { $("speedHint").textContent = "Qualidade máxima: todas as páginas em todos os passos."; return; }
+  const parts = [`${computed}/${steps} passos calculados`];
+  if (area > 1) parts.push(`calcula em ${w}×${h} e amplia para ${W}×${H}`);
+  if (fg > 1) parts.push(`${f} de ${F} quadros calculados (resto interpolado)`);
+  let txt = `≈ ${gain.toFixed(1)}× mais rápido: ${parts.join(" · ")}.`;
+  if (v > gain * 1.05) txt += " Piso físico atingido: acima disso não fica mais rápido.";
+  else if (v > 4) txt += " Qualidade cai bastante.";
+  $("speedHint").textContent = txt;
 }
+for (const id of ["steps", "width", "height", "frames"]) $(id).addEventListener("input", () => speedHint());
 $("speed").addEventListener("input", () => {
   $("speedRange").value = Math.min(10, +$("speed").value || 1);
   speedHint();
@@ -358,7 +386,6 @@ $("speedRange").addEventListener("input", () => {
   $("speed").value = $("speedRange").value;
   speedHint();
 });
-$("steps").addEventListener("input", speedHint);
 speedHint();
 
 $("cancelBtn").addEventListener("click", async () => {

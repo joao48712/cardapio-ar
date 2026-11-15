@@ -257,3 +257,37 @@ def test_speed_variable_skips_pages(tmp_path):
     assert info["reused"] > 0 and info["computed"] + info["reused"] == steps
     assert loads3 < loads1 * 0.7  # menos páginas percorridas
     assert abs(img3 - img1).mean() < 40  # ainda parecida
+
+
+def test_split_speed_no_ceiling():
+    from paged.speed import split_speed
+    gains = [split_speed(v, 25, 512, 512, 81, 81)["estimated_gain"] for v in (1, 2, 8, 30, 200, 2000)]
+    assert gains == sorted(gains) and gains[0] == 1
+    assert gains[3] > 20  # passou do teto antigo (~8x com 25 passos)
+    sp = split_speed(30, 25, 512, 512, 81, 81)
+    assert sp["width"] < 512 and (sp["frames"] - 1) % 4 == 0
+    floor = split_speed(10**6, 25, 512, 512, 81, 81)
+    assert floor["at_floor"] and floor["width"] == 64 and floor["steps_computed"] == 3
+    # sem pular passos (pipeline sem callback), o excedente vai todo para resolução/quadros
+    assert split_speed(4, 25, 512, 512, 0, can_skip_steps=False)["width"] == 256
+
+
+def test_upscale_video_interpolates():
+    import numpy as np
+    from paged.speed import upscale_video
+    frames = [np.full((8, 8, 3), i / 4, dtype=np.float32) for i in range(5)]
+    out = upscale_video(frames, 16, 16, 9)
+    assert len(out) == 9 and out[0].shape == (16, 16, 3)
+    assert abs(out[1].mean() - 0.125) < 0.01  # quadro intermediário misturado
+
+
+def test_speed_huge_value_on_pipeline(tmp_path):
+    pytest.importorskip("diffusers")
+    _tiny_sd(tmp_path)
+    m = load_diffusion(str(tmp_path), torch.device("cpu"), torch.float32, None)
+    out = m.generate(str(tmp_path / "x"), "um gato", lambda s, t: None, steps=10,
+                     width=128, height=128, seed=1, speed=1000)
+    from PIL import Image
+    assert Image.open(out).size == (128, 128)  # pediu 128, calculou menor e ampliou
+    info = m.last_speed_info
+    assert info["internal"].startswith("64x64") and info["computed"] == 3 and info["at_floor"]

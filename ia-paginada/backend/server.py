@@ -312,7 +312,10 @@ def loaded_info():
     return {"name": STATE["name"], "kind": m.kind, "device": str(m.device),
             "dtype": str(m.dtype).replace("torch.", ""),
             "accepts_image": bool(getattr(m, "accepts_image", lambda: False)()),
-            "supports_speed": bool(getattr(m, "supports_speed", lambda: False)()),
+            "supports_speed": m.kind in ("image", "video"),
+            "can_skip_steps": bool(getattr(m, "supports_speed", lambda: False)()),
+            "default_size": list(m.default_size()) if hasattr(m, "default_size") else [0, 0],
+            "default_frames": m.default_frames() if hasattr(m, "default_frames") else 0,
             "pagers": m.stats()}
 
 
@@ -382,9 +385,11 @@ def generate(req: GenReq):
                 out = m.generate(os.path.join(outputs_dir(), fname), on_step=on_step,
                                  image=image, **req.model_dump(exclude={"image"}))
                 si = getattr(m, "last_speed_info", {})
-                if si.get("reused"):
+                if si.get("speed", 1) > 1:
                     job.add_log(f"⚡ Velocidade {si['speed']:g}: {si['computed']} passadas calculadas, "
-                                f"{si['reused']} reaproveitadas")
+                                f"{si['reused']} reaproveitadas, interno {si['internal']}, "
+                                f"ganho estimado {si['estimated_gain']}×"
+                                + (" (no piso físico: mais velocidade não reduz mais)" if si["at_floor"] else ""))
                 job.add_log(f"Arquivo salvo em {time.time() - t0:.1f}s")
                 return {"file": os.path.basename(out), "type": "video" if out.endswith(".mp4") else "image",
                         "seconds": round(time.time() - t0, 1), **si}
