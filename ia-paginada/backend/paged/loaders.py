@@ -34,7 +34,31 @@ def pick_dtype(pref: str, device: torch.device) -> torch.dtype:
         return torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
     if device.type == "mps":
         return torch.float16
-    return torch.float32
+    # CPU: bfloat16 só se o processador calcula bf16 em hardware (AMX/AVX512-BF16);
+    # metade dos bytes para mover e sem conversão quando o checkpoint já é bf16.
+    return torch.bfloat16 if cpu_has_bf16() else torch.float32
+
+
+def cpu_has_bf16() -> bool:
+    try:
+        with open("/proc/cpuinfo", encoding="utf-8") as fh:
+            flags = fh.read()
+        return "amx_bf16" in flags or "avx512_bf16" in flags
+    except OSError:
+        return False
+
+
+def tune_cpu(device: torch.device) -> None:
+    """Usa todos os núcleos no cálculo quando a "impressora" é a CPU."""
+    if device.type == "cpu":
+        n = os.cpu_count() or 1
+        torch.set_num_threads(n)
+
+
+def pin_device(model: torch.nn.Module, device: torch.device) -> None:
+    """Pesos fora da memória ficam em 'meta'; o modelo deve dizer o dispositivo real."""
+    base = type(model)
+    model.__class__ = type(base.__name__, (base,), {"device": property(lambda self: device)})
 
 
 def detect_kind(path: str) -> Optional[str]:
@@ -193,7 +217,8 @@ def _build_empty(cls, folder: str, dtype: torch.dtype):
     return model.eval()
 
 
-def load_text(path: str, device, dtype, on_event, prefetch=True, ram_cache_gb=0.0) -> TextModel:
+def load_text(path: str, device, dtype, on_event, prefetch=2, pack="auto",
+              min_page_mb=1.0) -> TextModel:
     from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
     config = AutoConfig.from_pretrained(path)
@@ -201,13 +226,14 @@ def load_text(path: str, device, dtype, on_event, prefetch=True, ram_cache_gb=0.
         model = AutoModelForCausalLM.from_config(config)
     model.eval()
     pager = PagedModel(model, CheckpointIndex(path), device, dtype, prefetch=prefetch,
-                       ram_cache_gb=ram_cache_gb, on_event=on_event, label="texto")
+                       pack=pack, min_page_mb=min_page_mb, on_event=on_event, label="texto")
+    pin_device(model, torch.device(device))
     tok = AutoTokenizer.from_pretrained(path)
     return TextModel(path, model, tok, pager, device, dtype)
 
 
-def load_diffusion(path: str, device, dtype, on_event, prefetch=True, ram_cache_gb=0.0,
-                   resident_below_mb: float = 300.0) -> DiffusionModel:
+def load_diffusion(path: str, device, dtype, on_event, prefetch=2, pack="auto",
+                   min_page_mb=1.0, resident_below_mb: float = 0.0) -> DiffusionModel:
     from diffusers import DiffusionPipeline
 
     with open(os.path.join(path, "model_index.json"), encoding="utf-8") as fh:
@@ -227,9 +253,10 @@ def load_diffusion(path: str, device, dtype, on_event, prefetch=True, ram_cache_
         model = _build_empty(cls, folder, dtype)
         ckpt = CheckpointIndex(folder)
         small = ckpt.total_bytes < resident_below_mb * 2**20
-        pagers.append(PagedModel(model, ckpt, device, dtype, prefetch=prefetch,
-                                 ram_cache_gb=ram_cache_gb, paged=not small,
+        pagers.append(PagedModel(model, ckpt, device, dtype, prefetch=prefetch, pack=pack,
+                                 paged=not small, min_page_mb=min_page_mb,
                                  on_event=on_event, label=name))
+        pin_device(model, torch.device(device))
         components[name] = model
 
     import diffusers.utils.deprecation_utils as du
@@ -249,13 +276,15 @@ def load_diffusion(path: str, device, dtype, on_event, prefetch=True, ram_cache_
 
 
 def load_any(path: str, device_pref="auto", dtype_pref="auto", on_event=None,
-             prefetch=True, ram_cache_gb=0.0, resident_below_mb=300.0) -> LoadedModel:
+             prefetch=2, pack="auto", min_page_mb=1.0, resident_below_mb=0.0) -> LoadedModel:
     kind = detect_kind(path)
     device = pick_device(device_pref)
     dtype = pick_dtype(dtype_pref, device)
+    tune_cpu(device)
+    prefetch = int(prefetch)
     if kind == "text":
-        return load_text(path, device, dtype, on_event, prefetch, ram_cache_gb)
+        return load_text(path, device, dtype, on_event, prefetch, pack, min_page_mb)
     if kind in ("image", "video"):
-        return load_diffusion(path, device, dtype, on_event, prefetch, ram_cache_gb,
+        return load_diffusion(path, device, dtype, on_event, prefetch, pack, min_page_mb,
                               resident_below_mb)
     raise ValueError(f"Formato de modelo não reconhecido em {path}")

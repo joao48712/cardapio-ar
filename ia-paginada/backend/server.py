@@ -108,7 +108,13 @@ def on_page_event(ev: dict) -> None:
         if seen[ev["label"]] <= ev["total"] or ev["ms"] > 2000:
             job.add_log(job.message)
     elif ev["type"] == "ready":
-        job.add_log(f"✅ {ev['label']}: {ev['pages']} páginas, {ev['resident_mb']} MB residentes")
+        job.add_log(f"✅ {ev['label']}: {ev['pages']} páginas ({ev['store']}), "
+                    f"{ev['resident_mb']} MB residentes")
+    elif ev["type"] == "pack":
+        job.progress = ev["progress"]
+        job.message = f"📚 Encadernando {ev['label']} (conversão única): {ev['progress'] * 100:.0f}%"
+        if ev["progress"] in (0, 1) or int(ev["progress"] * 100) % 10 == 0:
+            job.add_log(job.message)
 
 
 # --------------------------------------------------------------------------- #
@@ -245,9 +251,10 @@ class LoadReq(BaseModel):
     name: str
     device: str = "auto"
     dtype: str = "auto"
-    prefetch: bool = True
-    ram_cache_gb: float = 0.0
-    resident_below_mb: float = 300.0  # componentes menores que isso não são paginados
+    prefetch: int = 2               # páginas lidas adiante (0 = nenhuma)
+    pack: str = "auto"              # "auto": encaderna (converte 1 vez) | "off"
+    min_page_mb: float = 1.0        # peças fora das camadas maiores que isso viram páginas
+    resident_below_mb: float = 0.0  # componentes menores que isso ficam inteiros (0 = divide tudo)
 
 
 @app.post("/api/load")
@@ -266,8 +273,8 @@ def load(req: LoadReq):
             try:
                 _unload_locked()
                 job.add_log(f"Montando {req.name} vazio (dispositivo meta)...")
-                m = load_any(path, req.device, req.dtype, on_page_event, req.prefetch, req.ram_cache_gb,
-                             req.resident_below_mb)
+                m = load_any(path, req.device, req.dtype, on_page_event, req.prefetch, req.pack,
+                             req.min_page_mb, req.resident_below_mb)
                 STATE["model"], STATE["name"] = m, req.name
                 job.add_log(f"Pronto: {m.kind} em {m.device} ({str(m.dtype).replace('torch.', '')})")
                 return loaded_info()

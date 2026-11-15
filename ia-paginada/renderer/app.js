@@ -194,7 +194,8 @@ async function loadModel(name) {
   try {
     const job = await post("/api/load", {
       name, device: $("device").value, dtype: $("dtype").value,
-      prefetch: $("prefetch").checked, ram_cache_gb: Number($("ramCache").value) || 0,
+      prefetch: Number($("prefetch").value) || 0, pack: $("pack").value,
+      min_page_mb: Number($("minPageMb").value) || 0,
       resident_below_mb: Number($("residentMb").value) || 0,
     });
     showTab("run");
@@ -259,8 +260,9 @@ function renderPress(pagers, msg = "") {
     return el("div", { class: "pager" },
       el("div", { class: "pager-head" }, el("b", {}, p.label),
         el("small", { class: "muted" },
-          `${p.pages} páginas · ${p.loads} leituras · ${gb(p.bytes_read)} lidos · residente ${gb(p.resident_bytes)}` +
-          (p.last_ms ? ` · última ${p.last_ms} ms` : ""))),
+          `${p.pages} páginas · ${p.store}${p.zero_copy ? " (sem cópia)" : ""} · ${p.loads} trocas · ` +
+          `${gb(p.bytes_read)} passados · residente ${gb(p.resident_bytes)}` +
+          (p.loads ? ` · troca média ${p.avg_ms} ms` : ""))),
       strip);
   }));
 }

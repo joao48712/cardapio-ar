@@ -11,21 +11,43 @@ próxima.
 
 1. O modelo é montado **vazio** (dispositivo `meta` do PyTorch): a arquitetura existe, mas não
    ocupa nem 1 byte de RAM/VRAM.
-2. Cada bloco grande (camada de transformer, bloco da UNet, bloco do VAE…) vira uma **página**.
-3. Um *hook* do PyTorch roda logo antes de cada página: lê só os pesos dela do `.safetensors` e
-   coloca na GPU/CPU. Ao terminar o forward, os pesos são **descartados** e a próxima página entra.
-4. Enquanto uma página “imprime”, a próxima já está sendo lida do disco em segundo plano
-   (*prefetch*). Opcionalmente, páginas lidas ficam num **cache em RAM** (útil quando o modelo
-   cabe na RAM mas não na VRAM).
-5. Peças pequenas (embeddings, normas, cabeça de saída) ficam residentes o tempo todo.
+2. **Todos os componentes são divididos em páginas**: cada camada de transformer, bloco da UNet,
+   bloco do VAE, camada dos codificadores de texto — e também as peças soltas grandes
+   (embeddings, cabeça de saída, convoluções de entrada/saída).
+3. Um *hook* do PyTorch roda logo antes de cada página e põe os pesos dela no lugar. Ao terminar o
+   forward, os pesos são **descartados** e a próxima página entra.
+4. Só peças minúsculas (normas) ou compartilhadas entre módulos ficam residentes.
 
-Pico de memória ≈ peças residentes + 1–2 páginas + ativações, em vez do modelo inteiro.
+Pico de memória ≈ 1–3 páginas + ativações, em vez do modelo inteiro.
+
+### Troca de página rápida (só CPU)
+
+| Técnica | O que faz |
+|---|---|
+| **Sem cópia (mmap)** | Na CPU, a página vira uma *janela* direto no arquivo (`torch.frombuffer` sobre `mmap`). “Carregar” custa ~0,3 ms; o sistema operacional lê do disco só o que é tocado e guarda no cache dele. |
+| **Encadernação** | Se o tipo no disco difere do tipo de cálculo (ex.: fp16 → fp32), converte **uma única vez** para um arquivo `.ia-paginada-pack/` alinhado e na ordem das páginas. Depois disso nunca mais há conversão. |
+| **Ordem aprendida + leitura antecipada** | Registra a ordem real em que as páginas rodam (UNets e VAEs não seguem a numeração) e pede ao sistema (`madvise WILLNEED`) as próximas N páginas enquanto a atual calcula. |
+| **bfloat16 automático** | Em CPUs com AMX/AVX512-BF16, calcula em bf16: metade dos bytes para mover. |
+| **Todos os núcleos** | `torch.set_num_threads(nº de núcleos)`. |
+
+Medido com `python backend/bench.py` (Llama de 16 camadas, checkpoint em fp16, CPU de 4 núcleos):
+
+| Modo | ms/passada | troca média | |
+|---|---:|---:|---:|
+| Paginado, convertendo a cada leitura (versão antiga) | 186,8 | 2,04 ms | 1,0× |
+| Paginado, encadernado sem cópia (fp32) | 65,2 | 0,31 ms | 2,9× |
+| **Paginado, sem cópia em bfloat16 (AMX)** | **34,7** | 0,26 ms | **5,4×** |
+| Modelo inteiro carregado na RAM (fp32), referência | 56,7 | — | |
+
+Quando o modelo é maior que a RAM, o limite passa a ser a velocidade do disco: a leitura antecipada
+mantém o SSD ocupado enquanto a CPU calcula.
 Funciona com qualquer arquitetura que o `transformers`/`diffusers` saibam montar, inclusive com
 KV-cache na geração de texto. O código do núcleo está em
 [`backend/paged/pager.py`](backend/paged/pager.py).
 
-**Troca:** fica bem mais lento (cada token de texto ou passo de difusão relê o modelo inteiro do
-disco). Um SSD NVMe ajuda muito; o cache em RAM ajuda mais ainda.
+**Troca:** quando o modelo não cabe na RAM, cada token de texto ou passo de difusão relê o modelo
+do disco — um SSD NVMe ajuda muito. A encadernação ocupa espaço extra em disco (ex.: fp16 → fp32
+dobra o tamanho); desligue-a na tela “Meus modelos” se faltar espaço.
 
 ## Recursos
 
@@ -34,7 +56,7 @@ disco). Um SSD NVMe ajuda muito; o cache em RAM ajuda mais ainda.
   quais modelos o Space usa). Mostra os arquivos e o tamanho antes de baixar, baixa só
   `.safetensors` + configs, pode preferir a variante fp16, aceita token para modelos restritos.
 - 📚 **Meus modelos**: carregar / descarregar / apagar; escolher GPU (CUDA), Apple (MPS) ou CPU,
-  precisão, cache em RAM, prefetch e a partir de que tamanho paginar.
+  precisão, quantas páginas ler adiante, encadernação e o tamanho mínimo de uma página.
 - ✨ **Gerar**: texto com streaming (respeita o chat template), imagens e vídeos (MP4) via
   pipelines do `diffusers`, com imagem de entrada opcional (img2img / imagem→vídeo), semente,
   passos, guidance, tamanho, quadros, FPS e cancelamento.
@@ -83,6 +105,7 @@ ia-paginada/
 ├── electron/main.mjs        # janela + inicia o backend Python numa porta livre (com chave secreta)
 ├── renderer/                # interface (HTML/CSS/JS puro)
 ├── backend/
+│   ├── bench.py             # mede a velocidade da troca de páginas
 │   ├── server.py            # API local (FastAPI) — tarefas, download, carregar, gerar
 │   ├── paged/pager.py       # ⭐ o carregador página-por-página
 │   ├── paged/loaders.py     # monta modelos de texto (transformers) e imagem/vídeo (diffusers)

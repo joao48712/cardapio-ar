@@ -70,11 +70,14 @@
             <select id="device"><option value="auto">Automático</option><option value="cuda">GPU (CUDA)</option><option value="mps">Apple (MPS)</option><option value="cpu">CPU</option></select></label>
           <label>Precisão
             <select id="dtype"><option value="auto">Automática</option><option value="bfloat16">bfloat16</option><option value="float16">float16</option><option value="float32">float32</option></select></label>
-          <label>Cache em RAM (GB)
-            <input id="ramCache" type="number" min="0" step="1" value="0" title="0 = sempre relê do disco" /></label>
-          <label>Não paginar partes menores que (MB)
-            <input id="residentMb" type="number" min="0" step="50" value="300" title="0 = pagina tudo" /></label>
-          <label class="check"><input id="prefetch" type="checkbox" checked /> ler a próxima página enquanto a atual roda</label>
+          <label>Ler adiante (páginas)
+            <input id="prefetch" type="number" min="0" max="16" value="2" title="Quantas páginas o disco já vai lendo enquanto a atual calcula" /></label>
+          <label>Encadernação para velocidade
+            <select id="pack"><option value="auto">Automática (converte 1 vez, troca de página sem cópia)</option><option value="off">Desligada (converte a cada leitura, sem usar disco extra)</option></select></label>
+          <label>Peças soltas viram página acima de (MB)
+            <input id="minPageMb" type="number" min="0" step="1" value="1" title="Embeddings, cabeça de saída, convs fora das camadas" /></label>
+          <label>Componentes inteiros abaixo de (MB)
+            <input id="residentMb" type="number" min="0" step="50" value="0" title="0 = divide todos os componentes em páginas" /></label>
         </div>
       </div>
       <div id="modelList" class="list"></div>
