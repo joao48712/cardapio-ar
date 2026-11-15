@@ -41,6 +41,27 @@ Medido com `python backend/bench.py` (Llama de 16 camadas, checkpoint em fp16, C
 
 Quando o modelo é maior que a RAM, o limite passa a ser a velocidade do disco: a leitura antecipada
 mantém o SSD ocupado enquanto a CPU calcula.
+
+### ⚡ Variável “Velocidade” (imagem e vídeo)
+
+A troca de página já custa < 1 ms; numa geração de 205 s, as trocas somam ~1 s. O tempo está no
+**cálculo** dentro das páginas. Por isso a variável **Velocidade** (número ≥ 1, **sem limite
+superior**) controla quantas vezes as páginas pesadas são percorridas: com velocidade N, o modelo
+principal (UNet/transformer) só é recalculado em ~1 de cada N passos; nos outros, a saída do último
+cálculo é reaproveitada e nenhuma página é carregada. Os 2 primeiros passos e o último são sempre
+calculados. `1` = idêntico ao normal.
+
+- No app: controle ⚡ Velocidade na tela **Gerar** (campo livre + barra).
+- Na API: campo `speed` em `POST /api/generate`.
+- Padrão global: variável de ambiente `IAPAG_SPEED` (ex.: `IAPAG_SPEED=2 npm start`).
+
+Medido com `ali-vilab/text-to-video-ms-1.7b`, 256×256, 16 quadros, 25 passos, só CPU (4 núcleos):
+
+| Velocidade | Tempo | Passos calculados | Qualidade |
+|---:|---:|---:|---|
+| 1× | 205 s | 25 | referência |
+| 2× | 120 s | 14 | praticamente igual |
+| 4× | 70 s | 8 | perde detalhe no fundo |
 Funciona com qualquer arquitetura que o `transformers`/`diffusers` saibam montar, inclusive com
 KV-cache na geração de texto. O código do núcleo está em
 [`backend/paged/pager.py`](backend/paged/pager.py).
@@ -87,6 +108,7 @@ Variáveis opcionais:
 | `IAPAG_HOME`   | Pasta dos modelos e saídas (padrão `~/IA-Paginada`)      |
 | `IAPAG_PYTHON` | Python a usar (padrão: `backend/.venv` ou `python3`)      |
 | `HF_TOKEN`     | Token do Hugging Face (também pode ser digitado no app)  |
+| `IAPAG_SPEED`  | Velocidade padrão das gerações (padrão `1`, sem limite)  |
 
 ## Formatos suportados
 
@@ -109,6 +131,7 @@ ia-paginada/
 │   ├── server.py            # API local (FastAPI) — tarefas, download, carregar, gerar
 │   ├── paged/pager.py       # ⭐ o carregador página-por-página
 │   ├── paged/loaders.py     # monta modelos de texto (transformers) e imagem/vídeo (diffusers)
+│   ├── paged/speed.py       # variável Velocidade (pula passos reaproveitando saídas)
 │   ├── paged/hub.py         # busca/planos/download no Hugging Face (modelos e Spaces)
 │   └── tests/               # prova que o resultado paginado = resultado do modelo inteiro
 └── scripts/                 # setup do venv Python

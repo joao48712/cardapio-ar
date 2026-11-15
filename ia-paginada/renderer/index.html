@@ -100,6 +100,13 @@
             </div>
             <div data-for="image video">
               <label>Prompt negativo<input id="negative" /></label>
+              <div class="speed" data-speed>
+                <label>⚡ Velocidade <b id="speedVal">1×</b>
+                  <input id="speed" type="number" value="1" min="1" step="0.5" title="Sem limite superior" />
+                </label>
+                <input id="speedRange" type="range" min="1" max="10" step="0.5" value="1" aria-label="Velocidade" />
+                <small id="speedHint" class="muted"></small>
+              </div>
               <div class="row">
                 <label>Passos<input id="steps" type="number" value="25" min="1" /></label>
                 <label>Guidance<input id="guidance" type="number" value="5" step="0.5" /></label>

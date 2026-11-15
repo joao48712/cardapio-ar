@@ -158,6 +158,12 @@ class DiffusionModel(LoadedModel):
         self.pipe = pipe
         self.kind = kind
         self.call_params = set(inspect.signature(pipe.__call__).parameters)
+        from .speed import install
+        self.step_caches = install(pipe)
+        self.last_speed_info: Dict[str, Any] = {}
+
+    def supports_speed(self) -> bool:
+        return bool(self.step_caches) and bool({"callback_on_step_end", "callback"} & self.call_params)
 
     def accepts_image(self) -> bool:
         return "image" in self.call_params
@@ -165,7 +171,8 @@ class DiffusionModel(LoadedModel):
     def generate(self, out_path: str, prompt: str, on_step: Callable[[int, int], None],
                  negative_prompt: str = "", steps: int = 25, guidance: float = 5.0,
                  width: int = 0, height: int = 0, frames: int = 0, fps: int = 16,
-                 seed: int = -1, image=None, **_):
+                 seed: int = -1, image=None, speed: float = 1.0, **_):
+        from .speed import plan_steps
         p = self.call_params
         kw: Dict[str, Any] = {"prompt": prompt}
         if negative_prompt and "negative_prompt" in p:
@@ -186,17 +193,36 @@ class DiffusionModel(LoadedModel):
         if int(seed) >= 0:
             kw["generator"] = torch.Generator(gen_device).manual_seed(int(seed))
         total = int(steps)
+        speed = max(1.0, float(speed or 1))
+        plan = plan_steps(total, speed) if self.supports_speed() and speed > 1 else None
+        for c in self.step_caches:
+            c.start(plan)
+
+        def step_done(step):
+            for c in self.step_caches:
+                c.next_step()
+            on_step(step + 1, total)
+
         if "callback_on_step_end" in p:
             def cb(_pipe, step, _t, cb_kwargs):
-                on_step(step + 1, total)
+                step_done(step)
                 return cb_kwargs
             kw["callback_on_step_end"] = cb
         elif "callback" in p:  # pipelines antigos (ex.: ModelScope text-to-video)
-            kw["callback"] = lambda step, _t, _lat: on_step(step + 1, total)
+            kw["callback"] = lambda step, _t, _lat: step_done(step)
             if "callback_steps" in p:
                 kw["callback_steps"] = 1
-        with torch.inference_mode():
-            result = self.pipe(**kw)
+        try:
+            with torch.inference_mode():
+                result = self.pipe(**kw)
+        finally:
+            self.last_speed_info = {
+                "speed": speed if plan else 1.0,
+                "computed": sum(c.computed for c in self.step_caches),
+                "reused": sum(c.reused for c in self.step_caches),
+            }
+            for c in self.step_caches:
+                c.start(None)
         if getattr(result, "frames", None) is not None:
             from diffusers.utils import export_to_video
             out_path = os.path.splitext(out_path)[0] + ".mp4"

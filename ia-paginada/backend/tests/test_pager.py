@@ -198,3 +198,62 @@ def test_legacy_vae_attention_names(tmp_path):
     z = torch.randn(1, 4, 8, 8)
     with torch.inference_mode():
         assert torch.allclose(full.decode(z).sample, empty.decode(z).sample, atol=1e-5)
+
+
+def test_speed_plan():
+    from paged.speed import plan_steps
+    assert plan_steps(25, 1) == [True] * 25
+    p = plan_steps(25, 2)
+    assert p[0] and p[1] and p[-1] and 12 <= sum(p) <= 15
+    assert sum(plan_steps(25, 4)) < sum(p)
+    assert sum(plan_steps(25, 1000)) == 3  # sem limite: só aquecimento + último
+
+
+def _tiny_sd(tmp_path):
+    import diffusers
+    from transformers import CLIPTextConfig, CLIPTextModel, CLIPTokenizer
+    torch.manual_seed(0)
+    unet = diffusers.UNet2DConditionModel(
+        block_out_channels=(32, 64), layers_per_block=1, sample_size=16, in_channels=4,
+        out_channels=4, down_block_types=("DownBlock2D", "CrossAttnDownBlock2D"),
+        up_block_types=("CrossAttnUpBlock2D", "UpBlock2D"), cross_attention_dim=32,
+        attention_head_dim=8, norm_num_groups=8)
+    vae = diffusers.AutoencoderKL(block_out_channels=(32, 64), in_channels=3, out_channels=3,
+                                  down_block_types=("DownEncoderBlock2D",) * 2,
+                                  up_block_types=("UpDecoderBlock2D",) * 2, latent_channels=4,
+                                  norm_num_groups=8)
+    te = CLIPTextModel(CLIPTextConfig(bos_token_id=0, eos_token_id=2, hidden_size=32,
+                                      intermediate_size=37, num_attention_heads=4,
+                                      num_hidden_layers=3, vocab_size=1000))
+    tok = CLIPTokenizer.from_pretrained("hf-internal-testing/tiny-random-clip")
+    pipe = diffusers.StableDiffusionPipeline(
+        unet=unet, vae=vae, text_encoder=te, tokenizer=tok, scheduler=diffusers.DDIMScheduler(),
+        safety_checker=None, feature_extractor=None, requires_safety_checker=False)
+    pipe.save_pretrained(tmp_path)
+
+
+def test_speed_variable_skips_pages(tmp_path):
+    pytest.importorskip("diffusers")
+    _tiny_sd(tmp_path)
+    m = load_diffusion(str(tmp_path), torch.device("cpu"), torch.float32, None)
+    assert m.supports_speed()
+    unet_pager = next(p for p in m.pagers if p.label == "unet")
+    steps = 10
+
+    def run(speed):
+        before = unet_pager.stats["loads"]
+        out = m.generate(str(tmp_path / f"v{speed}"), "um gato", lambda s, t: None, steps=steps,
+                         width=32, height=32, seed=5, speed=speed)
+        from PIL import Image
+        import numpy as np
+        return np.asarray(Image.open(out), dtype=np.float32), unet_pager.stats["loads"] - before
+
+    img1, loads1 = run(1)
+    img1b, _ = run(1)
+    assert (img1 == img1b).all()  # velocidade 1 = normal, determinístico
+    assert m.last_speed_info["reused"] == 0
+    img3, loads3 = run(3)
+    info = m.last_speed_info
+    assert info["reused"] > 0 and info["computed"] + info["reused"] == steps
+    assert loads3 < loads1 * 0.7  # menos páginas percorridas
+    assert abs(img3 - img1).mean() < 40  # ainda parecida

@@ -244,6 +244,8 @@ function setLoaded(info) {
   });
   const img = document.querySelector("[data-image]");
   if (img) img.hidden = !info?.accepts_image;
+  const sp = document.querySelector("[data-speed]");
+  if (sp) sp.hidden = !info?.supports_speed;
   $("genBtn").disabled = !info;
   renderPress(info?.pagers || []);
 }
@@ -297,6 +299,7 @@ $("genForm").addEventListener("submit", async (ev) => {
     negative_prompt: $("negative").value, steps: +$("steps").value, guidance: +$("guidance").value,
     width: +$("width").value, height: +$("height").value, frames: +$("frames").value,
     fps: +$("fps").value, seed: +$("seed").value, image: await readImage(),
+    speed: Math.max(1, +$("speed").value || 1),
   };
   $("genBtn").disabled = true;
   $("cancelBtn").disabled = false;
@@ -315,7 +318,9 @@ $("genForm").addEventListener("submit", async (ev) => {
       const media = done.result.type === "video"
         ? el("video", { src: url, controls: true, autoplay: true, loop: true })
         : el("img", { src: url, alt: prompt });
-      out.replaceChildren(media, el("p", { class: "muted" }, `Salvo em outputs/${done.result.file}`));
+      const r = done.result;
+      const extra = r.reused ? ` · velocidade ${r.speed}× (${r.computed} calculadas, ${r.reused} reaproveitadas)` : "";
+      out.replaceChildren(media, el("p", { class: "muted" }, `Salvo em outputs/${r.file} · ${r.seconds}s${extra}`));
     } else if (done.status === "done") {
       textBox.textContent = done.result?.text ?? done.text;
     } else if (done.status === "cancelled") {
@@ -333,6 +338,28 @@ $("genForm").addEventListener("submit", async (ev) => {
     if (info) renderPress(info.pagers);
   }
 });
+
+// ------------------------------------------------------------- velocidade
+function speedHint() {
+  const v = Math.max(1, +$("speed").value || 1);
+  const steps = Math.max(1, +$("steps").value || 1);
+  const computed = Math.min(steps, Math.ceil(Math.max(0, steps - 3) / v) + 3);
+  $("speedVal").textContent = `${v}×`;
+  $("speedHint").textContent = v <= 1
+    ? "Qualidade máxima: todas as páginas em todos os passos."
+    : `≈ ${computed} de ${steps} passos calculados (até ~${(steps / computed).toFixed(1)}× mais rápido). ` +
+      (v > 4 ? "Acima de 4× a qualidade cai bastante." : "Pouca perda de qualidade.");
+}
+$("speed").addEventListener("input", () => {
+  $("speedRange").value = Math.min(10, +$("speed").value || 1);
+  speedHint();
+});
+$("speedRange").addEventListener("input", () => {
+  $("speed").value = $("speedRange").value;
+  speedHint();
+});
+$("steps").addEventListener("input", speedHint);
+speedHint();
 
 $("cancelBtn").addEventListener("click", async () => {
   if (state.genJob) await post(`/api/jobs/${state.genJob}/cancel`);

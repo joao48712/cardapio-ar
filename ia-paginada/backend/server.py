@@ -312,6 +312,7 @@ def loaded_info():
     return {"name": STATE["name"], "kind": m.kind, "device": str(m.device),
             "dtype": str(m.dtype).replace("torch.", ""),
             "accepts_image": bool(getattr(m, "accepts_image", lambda: False)()),
+            "supports_speed": bool(getattr(m, "supports_speed", lambda: False)()),
             "pagers": m.stats()}
 
 
@@ -336,6 +337,9 @@ class GenReq(BaseModel):
     fps: int = 16
     seed: int = -1
     image: Optional[str] = None  # data URL
+    # Velocidade: o modelo principal é recalculado em ~1 de cada N passos
+    # (1 = normal; sem limite superior; quanto maior, mais rápido e menos fiel).
+    speed: float = float(os.environ.get("IAPAG_SPEED", "1"))
 
 
 @app.post("/api/generate")
@@ -377,8 +381,13 @@ def generate(req: GenReq):
                 fname = time.strftime("%Y%m%d-%H%M%S-") + job.id
                 out = m.generate(os.path.join(outputs_dir(), fname), on_step=on_step,
                                  image=image, **req.model_dump(exclude={"image"}))
+                si = getattr(m, "last_speed_info", {})
+                if si.get("reused"):
+                    job.add_log(f"⚡ Velocidade {si['speed']:g}: {si['computed']} passadas calculadas, "
+                                f"{si['reused']} reaproveitadas")
                 job.add_log(f"Arquivo salvo em {time.time() - t0:.1f}s")
-                return {"file": os.path.basename(out), "type": "video" if out.endswith(".mp4") else "image"}
+                return {"file": os.path.basename(out), "type": "video" if out.endswith(".mp4") else "image",
+                        "seconds": round(time.time() - t0, 1), **si}
             except BaseException:
                 m.reset()  # descarta páginas que ficaram pela metade
                 raise
