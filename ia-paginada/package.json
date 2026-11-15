@@ -1,0 +1,16 @@
+{
+  "name": "ia-paginada",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Roda modelos de IA gigantes (texto, imagem, vídeo) lendo os pesos uma página por vez.",
+  "type": "module",
+  "main": "electron/main.mjs",
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "start": "electron .",
+    "test:python": "node scripts/run-python.mjs -m pytest backend/tests -q"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0"
+  }
+}

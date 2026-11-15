@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; style-src 'self'; script-src 'self'; connect-src http://127.0.0.1:*; img-src 'self' data: http://127.0.0.1:*; media-src http://127.0.0.1:*" />
+  <title>IA Paginada</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <aside class="side">
+    <div class="brand"><div class="logo">📖</div><div><b>IA Paginada</b><small>uma página por vez</small></div></div>
+    <nav>
+      <button data-tab="hub" class="active">⬇️ Baixar modelos</button>
+      <button data-tab="models">📚 Meus modelos</button>
+      <button data-tab="run">✨ Gerar</button>
+      <button data-tab="system">🖥️ Sistema</button>
+    </nav>
+    <div id="loadedBadge" class="badge">Nenhum modelo carregado</div>
+    <div id="dlMini" class="dl-mini"></div>
+  </aside>
+
+  <main>
+    <!-- ======================== HUB ======================== -->
+    <section id="tab-hub" class="tab active">
+      <header><h1>Baixar do Hugging Face</h1>
+        <p>Busque modelos de texto, imagem ou vídeo. Só os arquivos <code>.safetensors</code> e configs são baixados — é o formato que permite ler uma camada por vez.</p></header>
+
+      <div class="card">
+        <form id="searchForm" class="row">
+          <input id="q" placeholder="Buscar (ex.: qwen, flux, wan, llama)…" />
+          <select id="kind">
+            <option value="">Todos os tipos</option>
+            <option value="text">Texto</option>
+            <option value="image">Imagem (texto → imagem)</option>
+            <option value="image2image">Imagem → imagem</option>
+            <option value="video">Vídeo (texto → vídeo)</option>
+            <option value="image2video">Imagem → vídeo</option>
+          </select>
+          <button class="primary">Buscar</button>
+        </form>
+        <div class="row small-gap">
+          <input id="repoDirect" placeholder="…ou cole um ID direto: organizacao/modelo" />
+          <button id="repoDirectBtn">Ver arquivos</button>
+        </div>
+        <div class="row small-gap">
+          <input id="spaceId" placeholder="Space do Hugging Face (ex.: usuario/meu-space) — descubro os modelos que ele usa" />
+          <button id="spaceBtn">Ler Space</button>
+        </div>
+        <details>
+          <summary>Token do Hugging Face (para modelos restritos)</summary>
+          <div class="row small-gap">
+            <input id="hfToken" type="password" placeholder="hf_…" />
+            <label class="check"><input id="fp16" type="checkbox" checked /> preferir variante fp16</label>
+          </div>
+        </details>
+      </div>
+
+      <div id="plan" class="card" hidden></div>
+      <div id="results" class="grid"></div>
+    </section>
+
+    <!-- ====================== MODELOS ====================== -->
+    <section id="tab-models" class="tab">
+      <header><h1>Meus modelos</h1><p id="homeInfo"></p></header>
+      <div class="card">
+        <h3>Opções de carregamento</h3>
+        <div class="row">
+          <label>Dispositivo
+            <select id="device"><option value="auto">Automático</option><option value="cuda">GPU (CUDA)</option><option value="mps">Apple (MPS)</option><option value="cpu">CPU</option></select></label>
+          <label>Precisão
+            <select id="dtype"><option value="auto">Automática</option><option value="bfloat16">bfloat16</option><option value="float16">float16</option><option value="float32">float32</option></select></label>
+          <label>Cache em RAM (GB)
+            <input id="ramCache" type="number" min="0" step="1" value="0" title="0 = sempre relê do disco" /></label>
+          <label>Não paginar partes menores que (MB)
+            <input id="residentMb" type="number" min="0" step="50" value="300" title="0 = pagina tudo" /></label>
+          <label class="check"><input id="prefetch" type="checkbox" checked /> ler a próxima página enquanto a atual roda</label>
+        </div>
+      </div>
+      <div id="modelList" class="list"></div>
+    </section>
+
+    <!-- ======================== GERAR ====================== -->
+    <section id="tab-run" class="tab">
+      <header><h1>Gerar</h1><p id="runInfo">Carregue um modelo em “Meus modelos”.</p></header>
+      <div class="split">
+        <div class="card">
+          <form id="genForm">
+            <label>Prompt<textarea id="prompt" rows="5" placeholder="Descreva o que você quer…"></textarea></label>
+            <div data-for="text">
+              <label>Instrução de sistema (opcional)<input id="system" /></label>
+              <div class="row">
+                <label>Máx. tokens<input id="maxTokens" type="number" value="256" min="1" /></label>
+                <label>Temperatura<input id="temperature" type="number" value="0.7" step="0.05" min="0" /></label>
+                <label>Top-p<input id="topP" type="number" value="0.95" step="0.05" min="0" max="1" /></label>
+              </div>
+            </div>
+            <div data-for="image video">
+              <label>Prompt negativo<input id="negative" /></label>
+              <div class="row">
+                <label>Passos<input id="steps" type="number" value="25" min="1" /></label>
+                <label>Guidance<input id="guidance" type="number" value="5" step="0.5" /></label>
+                <label>Semente<input id="seed" type="number" value="-1" /></label>
+              </div>
+              <div class="row">
+                <label>Largura<input id="width" type="number" value="0" step="8" placeholder="0 = padrão" /></label>
+                <label>Altura<input id="height" type="number" value="0" step="8" /></label>
+              </div>
+              <div class="row" data-for="video">
+                <label>Quadros<input id="frames" type="number" value="0" min="0" placeholder="0 = padrão" /></label>
+                <label>FPS<input id="fps" type="number" value="16" min="1" /></label>
+              </div>
+              <label data-image>Imagem de entrada (opcional)<input id="inputImage" type="file" accept="image/*" /></label>
+            </div>
+            <div class="row">
+              <button class="primary" id="genBtn">Gerar</button>
+              <button type="button" id="cancelBtn" disabled>Cancelar</button>
+            </div>
+          </form>
+        </div>
+        <div class="card output">
+          <div class="press">
+            <div class="press-title">Impressora de páginas <span id="pressMsg"></span></div>
+            <div id="press"></div>
+            <div class="bar"><div id="genBar"></div></div>
+          </div>
+          <div id="output" class="out"></div>
+          <details><summary>Log</summary><pre id="genLog"></pre></details>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================= SISTEMA ===================== -->
+    <section id="tab-system" class="tab">
+      <header><h1>Sistema</h1><p>Recursos que o motor PyTorch enxerga.</p></header>
+      <div id="sysInfo" class="card"></div>
+      <div class="card">
+        <h3>Como funciona</h3>
+        <p>Igual a uma impressora que imprime um livro página por página: o modelo é montado
+          <b>vazio</b> (sem ocupar memória). Quando a camada N vai rodar, só os pesos dela são lidos do
+          disco para a GPU/CPU; ao terminar, são descartados e a camada N+1 entra. Enquanto uma camada
+          roda, a próxima já está sendo lida em segundo plano. Assim cabe um modelo de 70&nbsp;GB numa
+          GPU de 8&nbsp;GB — mais devagar, mas funciona.</p>
+      </div>
+      <div class="card"><h3>Tarefas recentes</h3><div id="jobList" class="list"></div></div>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
