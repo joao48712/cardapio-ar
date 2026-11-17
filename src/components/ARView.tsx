@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import QRCode from "qrcode";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { PlateIcon } from "./PlateIcon";
 
 type MV = HTMLElement & { canActivateAR: boolean; loaded: boolean; activateAR: () => Promise<void> };
@@ -55,7 +55,7 @@ export function ARView({ src, photo, alt, className = "" }: Props) {
   const [mode, setMode] = useState<Mode>("loading");
   const [qr, setQr] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
-  const [arModes] = useState(() => (sceneViewerFailedBefore() ? AR_BROWSER_FIRST : AR_NATIVE_FIRST));
+  const [arModes, setArModes] = useState(() => (sceneViewerFailedBefore() ? AR_BROWSER_FIRST : AR_NATIVE_FIRST));
   // true depois que o AR nativo falhou: o próximo toque abre pelo navegador
   const [retry, setRetry] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -101,31 +101,55 @@ export function ARView({ src, photo, alt, className = "" }: Props) {
 
   // AR nativo não abriu: o model-viewer já troca sozinho para o próximo modo; aqui avisamos o cliente
   // e guardamos a informação para as próximas visitas neste aparelho.
+  const nativeFailed = useCallback(() => {
+    try {
+      localStorage.setItem(NO_SCENE_VIEWER_KEY, "1");
+    } catch {}
+    // Passa para o AR pelo navegador; ele exige um novo toque para abrir a câmera
+    setArModes(AR_BROWSER_FIRST);
+    setOpening(false);
+    // Espera o model-viewer escolher o próximo modo antes de conferir se sobrou algum
+    setTimeout(() => {
+      if (ref.current?.canActivateAR) setRetry(true);
+      else setMode("error");
+    }, 400);
+  }, []);
+
+  // Falha avisada: o Android devolve a página com um marcador quando não acha o visualizador nativo
   useEffect(() => {
     const onHash = () => {
-      if (window.location.hash !== NO_SCENE_VIEWER_HASH) return;
-      try {
-        localStorage.setItem(NO_SCENE_VIEWER_KEY, "1");
-      } catch {}
-      setOpening(false);
-      // Espera o model-viewer escolher o próximo modo antes de conferir se sobrou algum
-      setTimeout(() => {
-        if (ref.current?.canActivateAR) setRetry(true);
-        else setMode("error");
-      }, 400);
+      if (window.location.hash === NO_SCENE_VIEWER_HASH) nativeFailed();
     };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
-  }, []);
+  }, [nativeFailed]);
 
   async function open() {
-    if (!ref.current) return;
+    const el = ref.current;
+    if (!el) return;
     setRetry(false);
     setOpening(true);
+
+    // Falha silenciosa: quando o visualizador nativo abre, ele cobre a página (ela fica "hidden").
+    // Se nada cobrir a página em alguns segundos, o toque não abriu nada.
+    const tryingNative = /Android/i.test(navigator.userAgent) && arModes === AR_NATIVE_FIRST;
+    if (tryingNative) {
+      let covered = document.visibilityState === "hidden";
+      const onCover = () => {
+        if (document.visibilityState === "hidden") covered = true;
+      };
+      document.addEventListener("visibilitychange", onCover);
+      setTimeout(() => {
+        document.removeEventListener("visibilitychange", onCover);
+        const inBrowserAR = el.getAttribute("ar-status") === "session-started";
+        if (!covered && !inBrowserAR && !sceneViewerFailedBefore()) nativeFailed();
+      }, 4000);
+    }
+
     try {
-      await ref.current.activateAR();
+      await el.activateAR();
     } finally {
-      setTimeout(() => setOpening(false), 1500);
+      setTimeout(() => setOpening(false), tryingNative ? 4000 : 1500);
     }
   }
 
