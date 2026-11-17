@@ -16,6 +16,21 @@ type Props = {
 
 type Mode = "loading" | "ready" | "in-app" | "desktop" | "error";
 
+// O model-viewer volta para a página com este marcador quando o Scene Viewer (AR nativo do Android) não abre
+const NO_SCENE_VIEWER_HASH = "#model-viewer-no-ar-fallback";
+const NO_SCENE_VIEWER_KEY = "ar-sem-scene-viewer";
+// Nativo primeiro: roda liso. Em aparelho onde o nativo já falhou, vai direto pelo navegador (WebXR).
+const AR_NATIVE_FIRST = "scene-viewer quick-look webxr";
+const AR_BROWSER_FIRST = "webxr quick-look scene-viewer";
+
+function sceneViewerFailedBefore() {
+  try {
+    return localStorage.getItem(NO_SCENE_VIEWER_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 let loader: Promise<unknown> | null = null;
 function loadModelViewer() {
   loader ??= import("@google/model-viewer");
@@ -40,6 +55,9 @@ export function ARView({ src, photo, alt, className = "" }: Props) {
   const [mode, setMode] = useState<Mode>("loading");
   const [qr, setQr] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
+  const [arModes] = useState(() => (sceneViewerFailedBefore() ? AR_BROWSER_FIRST : AR_NATIVE_FIRST));
+  // true depois que o AR nativo falhou: o próximo toque abre pelo navegador
+  const [retry, setRetry] = useState(false);
   const [loaded, setLoaded] = useState(false);
   // Sem foto, o 3D é a própria imagem do prato
   const [show3d, setShow3d] = useState(!photo);
@@ -81,8 +99,28 @@ export function ARView({ src, photo, alt, className = "" }: Props) {
     QRCode.toString(window.location.href, { type: "svg", margin: 1, color: { dark: "#2a1a12", light: "#ffffff" } }).then(setQr);
   }, [mode]);
 
+  // AR nativo não abriu: o model-viewer já troca sozinho para o próximo modo; aqui avisamos o cliente
+  // e guardamos a informação para as próximas visitas neste aparelho.
+  useEffect(() => {
+    const onHash = () => {
+      if (window.location.hash !== NO_SCENE_VIEWER_HASH) return;
+      try {
+        localStorage.setItem(NO_SCENE_VIEWER_KEY, "1");
+      } catch {}
+      setOpening(false);
+      // Espera o model-viewer escolher o próximo modo antes de conferir se sobrou algum
+      setTimeout(() => {
+        if (ref.current?.canActivateAR) setRetry(true);
+        else setMode("error");
+      }, 400);
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
   async function open() {
     if (!ref.current) return;
+    setRetry(false);
     setOpening(true);
     try {
       await ref.current.activateAR();
@@ -101,7 +139,7 @@ export function ARView({ src, photo, alt, className = "" }: Props) {
             src={src}
             alt={alt}
             ar
-            ar-modes="scene-viewer quick-look webxr"
+            ar-modes={arModes}
             ar-scale="fixed"
             ar-placement="floor"
             loading="eager"
@@ -171,12 +209,17 @@ export function ARView({ src, photo, alt, className = "" }: Props) {
         {(mode === "loading" || mode === "ready") && (
           <button type="button" className="btn btn-primary w-full !min-h-14 text-base" disabled={mode === "loading" || opening} onClick={open}>
             <ARIcon />
-            {mode === "loading" ? "Preparando o prato…" : opening ? "Abrindo a câmera…" : "Ver na sua mesa"}
+            {mode === "loading" ? "Preparando o prato…" : opening ? "Abrindo a câmera…" : retry ? "Tocar de novo para abrir" : "Ver na sua mesa"}
           </button>
         )}
 
-        {mode === "ready" && (
+        {mode === "ready" && !retry && (
           <p className="mt-2 text-center text-xs text-muted">Aponte a câmera para a mesa. O prato aparece no tamanho real.</p>
+        )}
+        {mode === "ready" && retry && (
+          <p className="mt-2 text-center text-xs text-muted" role="status">
+            O visualizador do Google não abriu neste celular. Toque de novo para ver o prato pela câmera do navegador.
+          </p>
         )}
 
         {mode === "in-app" && (
